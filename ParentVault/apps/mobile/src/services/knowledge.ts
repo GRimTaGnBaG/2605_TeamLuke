@@ -9,7 +9,7 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
@@ -28,9 +28,11 @@ export function buildKnowledgeSources(
   schedule: ScheduleItem[],
   journal: JournalEntry[]
 ): KnowledgeSource[] {
+  // Delegate to the shared package so mobile and API use the same source-building logic.
   return buildSharedKnowledgeSources({ children, schedule, journal });
 }
 
 export function answerFromKnowledge(question: string, sources: KnowledgeSource[]): RagAnswer {
+  // Answers are grounded only in the provided sources.
   return answerFromSources(question, sources);
 }

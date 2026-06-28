@@ -9,18 +9,19 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ImportSourceType, ImportSuggestion, SchoolInfo } from '@parentvault/shared';
 import { Card } from '../components/Card';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { createDocumentImportSuggestion, inferDocumentSourceType, readDocumentAsset } from '../services/documentReader';
+import { ThemedTextInput } from '../components/ThemedTextInput';
+import { createImportSuggestion } from '../services/aiImport';
 import { useVaultStore } from '../store/vaultStore';
 import { useTheme } from '../theme';
 
@@ -54,6 +55,29 @@ const guides: Record<GuideKey, { title: string; sourceType: ImportSourceType; he
     helper: 'Use this for factual notes, conversations, symptoms, incidents, expenses, or school updates.',
     template: 'Journal title:\nChild:\nWhen it happened:\nPeople involved:\nLocation:\nWhat happened, factually:\nPhotos/screenshots attached?\nTags:',
     next: ['what happened', 'when', 'who was involved', 'any attachment/source']
+  }
+};
+
+const inferSourceType = (name = '', mimeType = ''): ImportSourceType => {
+  const value = `${name} ${mimeType}`.toLowerCase();
+  if (value.includes('calendar') || value.endsWith('.ics')) return 'calendar';
+  if (value.includes('custody') || value.includes('decree') || value.includes('order')) return 'decree';
+  if (value.includes('flyer')) return 'flyer';
+  if (value.includes('screenshot')) return 'screenshot';
+  if (value.includes('image')) return 'image';
+  if (value.includes('text') || value.endsWith('.txt')) return 'text';
+  return 'pdf';
+};
+
+const readAssetText = async (uri?: string) => {
+  if (!uri) return '';
+  try {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    if (blob.type && !blob.type.includes('text') && !blob.type.includes('calendar') && !blob.type.includes('json')) return '';
+    return await blob.text();
+  } catch {
+    return '';
   }
 };
 
@@ -144,8 +168,17 @@ export function ImportScreen() {
   // Creates a review-only draft from pasted/uploaded content. Nothing saves automatically here.
   const loadSuggestion = async (sourceType: ImportSourceType, label: string, rawText = pastedText) => {
     setStatus('Step 3: extracting a review draft...');
-    setSuggestion(await createDocumentImportSuggestion({ sourceType, label, rawText }));
+    setSuggestion(await createImportSuggestion({ sourceType, label, rawText }));
     setStatus('Step 3: review the draft below. Nothing was saved automatically.');
+  };
+
+  const extractCurrentGuide = async () => {
+    if (!pastedText.trim()) {
+      setPastedText(guide.template);
+      setStatus(`I added the ${guide.title} guide. Fill in what you know, then extract again.`);
+      return;
+    }
+    await loadSuggestion(guide.sourceType, `${guide.title} guide`, pastedText);
   };
 
   // Pick an image/screenshot and run the same review-first import flow.
@@ -153,7 +186,7 @@ export function ImportScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
     if (!result.canceled) {
       const asset = result.assets[0];
-      await loadSuggestion(inferDocumentSourceType(asset.fileName || 'image', asset.mimeType || 'image/*'), asset.fileName || 'selected image');
+      await loadSuggestion(inferSourceType(asset.fileName || 'image', asset.mimeType || 'image/*'), asset.fileName || 'selected image');
     }
   };
 
@@ -162,16 +195,18 @@ export function ImportScreen() {
     const result = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'text/*', 'text/calendar', 'application/json', 'image/*'], copyToCacheDirectory: true });
     if (!result.canceled) {
       const asset = result.assets[0];
-      const readResult = await readDocumentAsset(asset);
-      const rawText = readResult.text || pastedText;
-      setSuggestion(await createDocumentImportSuggestion({ sourceType: readResult.sourceType, label: asset.name, rawText, warnings: readResult.warnings }));
-      setStatus(rawText ? 'Step 3: review the document draft below. Nothing was saved automatically.' : 'Could not read text from that file yet. Paste the document text and try again.');
+      const rawText = (await readAssetText(asset.uri)) || pastedText;
+      await loadSuggestion(inferSourceType(asset.name, asset.mimeType || ''), asset.name, rawText);
     }
   };
 
   // Saves only reviewed schedule items that have the minimum useful fields.
   const applyAllScheduleItems = () => {
     const items = suggestion?.proposedScheduleItems || [];
+    if (!canSaveSchedule) {
+      setStatus('No complete schedule draft is ready yet. Add a title and date/time, or paste a clearer source and extract again.');
+      return;
+    }
     let savedCount = 0;
     items.forEach(item => {
       if (!item?.title || !item.startsAt || !item.type) return;
@@ -196,6 +231,10 @@ export function ImportScreen() {
   // Saves reviewed journal drafts and attaches audit metadata for later export/readback.
   const applyJournalEntries = () => {
     const entries = suggestion?.proposedJournalEntries || [];
+    if (!canSaveJournal) {
+      setStatus('No journal note is ready yet. Add factual source text or upload a clearer document first.');
+      return;
+    }
     entries.forEach((entry, index) => {
       const createdAt = new Date().toISOString();
       addJournalEntry({
@@ -227,6 +266,11 @@ export function ImportScreen() {
     setStatus(`Saved reviewed school details for ${school.schoolName}.`);
   };
 
+  const discardSuggestion = () => {
+    setSuggestion(null);
+    setStatus('Draft discarded. Choose another guide, upload a clearer source, or paste updated text.');
+  };
+
   // Button guards: these keep users from saving incomplete or unavailable draft sections.
   const canSaveSchedule = Boolean(suggestion?.proposedScheduleItems?.some(item => item.title && item.startsAt && item.type));
   const canSaveJournal = Boolean(suggestion?.proposedJournalEntries?.length);
@@ -254,8 +298,8 @@ export function ImportScreen() {
         <Text style={styles.label}>{guide.title}</Text>
         <Text style={styles.helper}>{guide.helper}</Text>
         <Text style={styles.miniLabel}>Try to include</Text>
-        <Text style={styles.chips}>{guide.next.join('  |  ')}</Text>
-        <TextInput
+        <Text style={styles.chips}>{guide.next.join('  -  ')}</Text>
+        <ThemedTextInput
           value={pastedText}
           onChangeText={setPastedText}
           placeholder="Fill in the guide or paste copied text here."
@@ -263,7 +307,7 @@ export function ImportScreen() {
           style={styles.textArea}
           textAlignVertical="top"
         />
-        <PrimaryButton onPress={() => loadSuggestion(guide.sourceType, `${guide.title} guide`, pastedText)} disabled={!pastedText.trim()}>Extract and preview</PrimaryButton>
+        <PrimaryButton onPress={extractCurrentGuide}>Extract and preview</PrimaryButton>
         <PrimaryButton tone="quiet" onPress={() => setPastedText(guide.template)}>Reset to guide template</PrimaryButton>
       </Card>
 
@@ -295,7 +339,7 @@ export function ImportScreen() {
               <Text>{asSchoolInfo(suggestion.proposedProfiles[0].school)?.schoolName}</Text>
               {asSchoolInfo(suggestion.proposedProfiles[0].school)?.mainPhone ? <Text>{asSchoolInfo(suggestion.proposedProfiles[0].school)?.mainPhone}</Text> : null}
               {asSchoolInfo(suggestion.proposedProfiles[0].school)?.websiteUrl ? <Text>{asSchoolInfo(suggestion.proposedProfiles[0].school)?.websiteUrl}</Text> : null}
-              <PrimaryButton tone="quiet" onPress={applySchoolDetails} disabled={!canSaveSchool}>Save reviewed school details</PrimaryButton>
+              <PrimaryButton tone="quiet" onPress={applySchoolDetails}>Save reviewed school details</PrimaryButton>
             </View>
           ) : null}
 
@@ -319,8 +363,9 @@ export function ImportScreen() {
           ))}
 
           {suggestion.warnings.map(warning => <Text key={warning} style={styles.warning}>Warning: {warning}</Text>)}
-          <PrimaryButton onPress={applyAllScheduleItems} disabled={!canSaveSchedule}>Save schedule draft</PrimaryButton>
-          <PrimaryButton tone="quiet" onPress={applyJournalEntries} disabled={!canSaveJournal}>Save journal note</PrimaryButton>
+          <PrimaryButton onPress={applyAllScheduleItems}>Save schedule draft</PrimaryButton>
+          <PrimaryButton tone="quiet" onPress={applyJournalEntries}>Save journal note</PrimaryButton>
+          <PrimaryButton tone="quiet" onPress={discardSuggestion}>Discard draft</PrimaryButton>
         </Card>
       ) : null}
     </ScrollView>
@@ -329,16 +374,16 @@ export function ImportScreen() {
 
 // Screen-specific styles for the Import tab only.
 const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
-  container: { padding: 18, paddingBottom: 34 },
-  title: { fontSize: 34, fontWeight: '900', color: theme.text, letterSpacing: -0.8, marginTop: 4 },
-  subtitle: { color: theme.muted, marginTop: 6, marginBottom: 18, lineHeight: 21 },
+  container: { padding: 20, paddingBottom: 32 },
+  title: { fontSize: 30, fontWeight: '800', color: theme.text },
+  subtitle: { color: theme.muted, marginBottom: 16 },
   step: { color: theme.primary, fontWeight: '900', fontSize: 12, textTransform: 'uppercase', marginBottom: 4 },
   label: { fontSize: 18, fontWeight: '800', marginBottom: 8, color: theme.text },
   miniLabel: { marginTop: 10, color: theme.muted, fontWeight: '800' },
   helper: { color: theme.subtle, marginTop: 8 },
   chips: { color: theme.primary, backgroundColor: theme.primarySoft, borderRadius: 12, padding: 10, marginTop: 6, marginBottom: 10, fontWeight: '700' },
   grid: { gap: 4 },
-  textArea: { minHeight: 190, borderWidth: 1, borderColor: theme.inputBorder, borderRadius: 14, padding: 12, backgroundColor: theme.input, color: theme.text },
+  textArea: { minHeight: 190 },
   status: { color: theme.primary, fontWeight: '700', marginBottom: 10 },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   source: { color: theme.subtle, fontWeight: '700' },
@@ -352,4 +397,3 @@ const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
   confidence: { color: theme.subtle, marginTop: 4 },
   warning: { color: '#b45309', marginTop: 8 }
 });
-

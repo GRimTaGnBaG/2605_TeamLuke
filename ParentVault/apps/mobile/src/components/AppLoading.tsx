@@ -9,6 +9,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { useTheme } from '../theme';
 
 export function AppLoading() {
+  // Use theme text color so the loading state works in both themes.
   const theme = useTheme();
 
   return (
@@ -19,6 +20,7 @@ export function AppLoading() {
 }
 
 const styles = StyleSheet.create({
+  // Center the loading message in the available content area.
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 20 },
   loadingText: { fontWeight: '700' }
 });

@@ -9,7 +9,7 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
@@ -23,18 +23,22 @@ import { SENSITIVE_FIELD_POLICY } from '@parentvault/shared';
 const DEMO_PREFIX = 'parentvault.demo.non_sensitive.';
 
 export async function saveNonSensitiveDemoValue(key: string, value: unknown) {
+  // Prefix all demo values so they are easy to identify and clear.
   await AsyncStorage.setItem(`${DEMO_PREFIX}${key}`, JSON.stringify(value));
 }
 
 export async function loadNonSensitiveDemoValue<T>(key: string): Promise<T | undefined> {
+  // Return undefined when a demo key has never been written.
   const raw = await AsyncStorage.getItem(`${DEMO_PREFIX}${key}`);
   return raw ? JSON.parse(raw) as T : undefined;
 }
 
 export async function saveSensitiveVaultValue(): Promise<never> {
+  // Hard stop: this placeholder prevents accidental plaintext persistence of child data.
   throw new Error('Refusing to persist sensitive ParentVault data without production encryption. See docs/ENCRYPTION.md.');
 }
 
 export function encryptionPolicySummary() {
+  // Exposes the shared policy object for settings/debug screens.
   return SENSITIVE_FIELD_POLICY;
 }

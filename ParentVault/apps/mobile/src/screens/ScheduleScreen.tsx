@@ -6,94 +6,26 @@
  * It previews Nanny-style reminder rules and lets parents schedule local alerts or mark medication as taken.
  *
  * Sensitive reminder notifications should use generic lock-screen text unless a parent explicitly opts into details.
+ *
+ * Reading guide:
+ * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
+ * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import type { NotificationOffset, ScheduleItem, ScheduleType } from '@parentvault/shared';
-import { AppModal } from '../components/AppModal';
 import { Card } from '../components/Card';
-import { ChoiceChip } from '../components/ChoiceChip';
-import { FormField } from '../components/FormField';
 import { PrimaryButton } from '../components/PrimaryButton';
+import { ThemedTextInput } from '../components/ThemedTextInput';
 import { previewNannyStandingReminders, previewNannyStyleAlerts, scheduleLocalAlerts } from '../services/notifications';
 import { useVaultStore } from '../store/vaultStore';
 import { useTheme } from '../theme';
 
-const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const typeMeta: Record<ScheduleType, { label: string; color: string; soft: string; text: string }> = {
-  custody: { label: 'Custody', color: '#8b5cf6', soft: '#ede9fe', text: '#4c1d95' },
-  school: { label: 'School', color: '#2563eb', soft: '#dbeafe', text: '#1e3a8a' },
-  appointment: { label: 'Medical', color: '#ef4444', soft: '#fee2e2', text: '#991b1b' },
-  medication: { label: 'Medication', color: '#f97316', soft: '#ffedd5', text: '#9a3412' },
-  event: { label: 'Event', color: '#10b981', soft: '#d1fae5', text: '#065f46' }
-};
-
-const quickEventTypes: { label: string; type: ScheduleType; title: string }[] = [
-  { label: 'Custody', type: 'custody', title: 'Custody exchange' },
-  { label: 'School', type: 'school', title: 'School event' },
-  { label: 'Doctor', type: 'appointment', title: 'Appointment' },
-  { label: 'Meds', type: 'medication', title: 'Medication reminder' },
-  { label: 'Other', type: 'event', title: 'Event' }
-];
-
-const monthTitle = (date: Date) => date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-const dateKey = (date: Date) => date.toISOString().slice(0, 10);
-const formatUsShortDate = (date: Date) => `${date.getMonth() + 1}/${date.getDate()}/${String(date.getFullYear()).slice(-2)}`;
-
-const buildMonthDays = (monthDate: Date) => {
-  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
-  const lastDay = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0);
-  const days: (Date | null)[] = [];
-
-  for (let index = 0; index < firstDay.getDay(); index += 1) days.push(null);
-  for (let day = 1; day <= lastDay.getDate(); day += 1) days.push(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
-  while (days.length % 7 !== 0) days.push(null);
-
-  return days;
-};
-
-const shortEventTitle = (title: string) => title.trim().length <= 12 ? title.trim() : `${title.trim().slice(0, 11)}...`;
-
-const parseList = (value: string) => value.split(',').map(item => item.trim()).filter(Boolean);
-
-const parseUsEventDateTime = (dateValue: string, timeValue: string) => {
-  const dateText = dateValue.trim();
-  const timeText = timeValue.trim().toLowerCase().replace(/\s+/g, '');
-  const dateMatch = dateText.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
-  const timeMatch = timeText.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)?$/);
-  if (!dateMatch || !timeMatch) return null;
-
-  const month = Number(dateMatch[1]) - 1;
-  const day = Number(dateMatch[2]);
-  const rawYear = Number(dateMatch[3]);
-  const year = rawYear < 100 ? 2000 + rawYear : rawYear;
-  let hour = Number(timeMatch[1]);
-  const minute = Number(timeMatch[2] ?? '0');
-  const meridiem = timeMatch[3];
-
-  if (month < 0 || month > 11 || day < 1 || day > 31 || minute > 59) return null;
-  if (meridiem) {
-    if (hour < 1 || hour > 12) return null;
-    if (meridiem === 'pm' && hour !== 12) hour += 12;
-    if (meridiem === 'am' && hour === 12) hour = 0;
-  } else if (hour > 23) return null;
-
-  const parsed = new Date(year, month, day, hour, minute);
-  return parsed.getFullYear() === year && parsed.getMonth() === month && parsed.getDate() === day ? parsed : null;
-};
-
-const reminderLabel = (offset: NotificationOffset) => {
-  if (offset === 'day_before') return 'Day before';
-  if (offset === 'day_of') return 'Morning of';
-  if (offset === 'hour_before') return '1 hour before';
-  const minutes = offset.customMinutesBefore;
-  if (minutes % 1440 === 0) return `${minutes / 1440} day${minutes === 1440 ? '' : 's'} before`;
-  if (minutes % 60 === 0) return `${minutes / 60} hour${minutes === 60 ? '' : 's'} before`;
-  return `${minutes} minutes before`;
-};
-
+// Converts the app's saved notification offset values into plain English for the UI.
+// Schedule items can store either named offsets like "day_before" or a custom minute count.
 const formatOffset = (offset: NotificationOffset) => {
   if (offset === 'day_before') return 'day before';
   if (offset === 'day_of') return 'morning of';
@@ -101,154 +33,233 @@ const formatOffset = (offset: NotificationOffset) => {
   return `${offset.customMinutesBefore} min before`;
 };
 
-const sourceLabel = (item: ScheduleItem) => {
-  if (!item.source) return 'Manual';
-  if (item.source === 'text') return item.confidence && item.confidence < 1 ? 'Text draft - review' : 'Manual/text';
-  return `${item.source} draft - review`;
+// Normalizes a date to local midnight so day comparisons ignore hours/minutes/seconds.
+const startOfDay = (date: Date) => new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+// Uses the normalized date as a stable React key and comparison value for calendar tiles.
+const dayKey = (date: Date) => startOfDay(date).toISOString();
+
+// Compares two Date objects by calendar day instead of exact timestamp.
+const isSameDay = (left: Date, right: Date) => dayKey(left) === dayKey(right);
+
+// Short date label used in dashboard text and status messages.
+const formatDayLabel = (date: Date) => date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+// Localized clock label used wherever a parent needs to scan event timing quickly.
+const formatTime = (date: Date) => date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+
+// Maps saved schedule item types into user-facing labels.
+// Keeping this centralized prevents one screen from saying "Med" while another says "Medication".
+const typeLabel = (item: ScheduleItem) => {
+  if (item.type === 'custody') return 'Custody';
+  if (item.type === 'school') return 'School';
+  if (item.type === 'medication') return 'Medication';
+  if (item.type === 'appointment') return 'Appointment';
+  return 'Event';
 };
 
-type ReminderDraft = { id: string; minutesBefore: string };
-
-type EventDraft = {
-  title: string;
-  type: ScheduleType;
-  childId: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  location: string;
-  custodyHolder: string;
-  bringList: string;
-  notes: string;
-  dayBefore: boolean;
-  dayOf: boolean;
-  hourBefore: boolean;
-  customReminders: ReminderDraft[];
+// Defines the color/icon language for each schedule category.
+// The same tone object powers the legend, date cards, calendar dots, pills, and next-up panel.
+const typeTone = (type: ScheduleItem['type']) => {
+  if (type === 'custody') return { color: '#f97316', soft: '#ffedd5', darkSoft: '#431407', icon: 'swap-horizontal-outline' as const };
+  if (type === 'school') return { color: '#14b8a6', soft: '#ccfbf1', darkSoft: '#134e4a', icon: 'school-outline' as const };
+  if (type === 'medication') return { color: '#ef4444', soft: '#fee2e2', darkSoft: '#450a0a', icon: 'medical-outline' as const };
+  if (type === 'appointment') return { color: '#8b5cf6', soft: '#ede9fe', darkSoft: '#2e1065', icon: 'clipboard-outline' as const };
+  return { color: '#2563eb', soft: '#dbeafe', darkSoft: '#172554', icon: 'sparkles-outline' as const };
 };
 
-const newReminderDraft = (): ReminderDraft => ({ id: `reminder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, minutesBefore: '' });
+// Returns the quick relative label used in the "Next up" panel.
+// The exact date is still shown beside it so the label is helpful without being ambiguous.
+const getRelativeDay = (date: Date) => {
+  const diff = Math.round((startOfDay(date).getTime() - startOfDay(new Date()).getTime()) / (24 * 60 * 60 * 1000));
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Tomorrow';
+  return `In ${diff} days`;
+};
 
-const defaultEventDraft = (date = new Date()): EventDraft => ({
-  title: '',
-  type: 'event',
-  childId: '',
-  date: formatUsShortDate(date),
-  startTime: '5pm',
-  endTime: '',
-  location: '',
-  custodyHolder: '',
-  bringList: '',
-  notes: '',
-  dayBefore: true,
-  dayOf: true,
-  hourBefore: true,
-  customReminders: []
-});
+// Builds the rolling 14-day strip shown under the quick-add/readiness cards.
+// It starts today and then walks forward one day at a time.
+const getCalendarDays = () => {
+  const today = startOfDay(new Date());
+  return Array.from({ length: 14 }, (_, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() + index);
+    return date;
+  });
+};
+
+// All schedule categories this screen supports for creation, filtering visuals, and the legend.
+const scheduleTypes: ScheduleType[] = ['custody', 'school', 'event', 'medication', 'appointment'];
+
+// Combines the date and time form fields into an ISO timestamp.
+// Invalid entries return undefined so the submit handler can show a friendly validation message.
+const parseEventDateTime = (dateText: string, timeText: string) => {
+  const datePart = dateText.trim();
+  const timePart = timeText.trim() || '09:00';
+  const parsed = new Date(`${datePart}T${timePart.length === 5 ? `${timePart}:00` : timePart}`);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+};
+
+// Turns changing readiness copy into a safe checkbox id.
+// This keeps the checked map stable for the current render without storing UI-only state in the vault.
+const readinessId = (label: string) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
 export function ScheduleScreen() {
+  // Theme/styles first; every color comes from the active light/dark theme.
   const theme = useTheme();
   const styles = createStyles(theme);
 
+  // Store values provide saved schedule items, children, and actions this tab can run.
   const schedule = useVaultStore(s => s.schedule);
   const children = useVaultStore(s => s.children);
   const addScheduleItem = useVaultStore(s => s.addScheduleItem);
+  const updateScheduleItem = useVaultStore(s => s.updateScheduleItem);
   const removeScheduleItem = useVaultStore(s => s.removeScheduleItem);
   const markMedicationTaken = useVaultStore(s => s.markMedicationTaken);
 
+  // alertStatus is UI feedback only. It tracks messages like "2 alerts scheduled" per card.
+  // It is intentionally separate from the schedule store because local notification scheduling
+  // is device-specific and should not rewrite the event itself.
   const [alertStatus, setAlertStatus] = useState<Record<string, string>>({});
-  const [showEventForm, setShowEventForm] = useState(false);
-  const [eventDraft, setEventDraft] = useState<EventDraft>(() => defaultEventDraft(new Date(Date.now() + 24 * 60 * 60 * 1000)));
-  const [eventFormStatus, setEventFormStatus] = useState('');
-  const [showOnboarding, setShowOnboarding] = useState(true);
-  const [onboardingStep, setOnboardingStep] = useState(0);
 
-  const onboardingTips = [
-    'Try adding your first custody pickup or school run.',
-    'Add what to bring: backpack, meds, uniform, insurance card, or court paperwork.',
-    'Use colors to scan custody, school, medical, medication, and general events fast.'
-  ];
+  // Draft fields back the manual "Add to calendar" form.
+  // They stay local until the parent taps Add calendar event and validation passes.
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftType, setDraftType] = useState<ScheduleType>('event');
+  const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [draftTime, setDraftTime] = useState('09:00');
+  const [draftLocation, setDraftLocation] = useState('');
+  const [draftNotes, setDraftNotes] = useState('');
+  const [draftError, setDraftError] = useState('');
 
+  // quickStatus gives confirmation for quick-add and remove actions without needing a toast library.
+  const [quickStatus, setQuickStatus] = useState('');
+
+  // checkedReadiness is local checklist state for the "Today readiness" card.
+  // These checks are lightweight daily confirmations, not permanent child-profile data.
+  const [checkedReadiness, setCheckedReadiness] = useState<Record<string, boolean>>({});
+
+  // pendingRemoveId implements the two-tap delete confirmation for schedule items.
+  // First tap arms the removal; second tap confirms it.
+  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
+
+  // Always show upcoming items in time order so the parent sees what matters next first.
   const sortedSchedule = useMemo(
     () => [...schedule].sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()),
     [schedule]
   );
+  // One timestamp for this render keeps all date calculations internally consistent.
+  const now = new Date();
+
+  // Only future/today items belong in the dashboard.
+  // startOfDay(now) keeps today's earlier events visible until tomorrow.
   const upcomingSchedule = useMemo(
-    () => sortedSchedule.filter(item => new Date(item.startsAt).getTime() >= Date.now()).slice(0, 7),
+    () => sortedSchedule.filter(item => new Date(item.startsAt).getTime() >= startOfDay(now).getTime()),
     [sortedSchedule]
   );
-  const calendarMonth = useMemo(() => new Date(), []);
-  const monthDays = useMemo(() => buildMonthDays(calendarMonth), [calendarMonth]);
-  const eventsByDate = useMemo(() => sortedSchedule.reduce<Record<string, ScheduleItem[]>>((groups, item) => {
-    const key = dateKey(new Date(item.startsAt));
-    groups[key] = [...(groups[key] ?? []), item];
-    return groups;
-  }, {}), [sortedSchedule]);
+  const todaySchedule = useMemo(
+    () => upcomingSchedule.filter(item => isSameDay(new Date(item.startsAt), now)),
+    [upcomingSchedule]
+  );
+  // The next upcoming item drives the large "Next up" panel at the top.
+  const nextItem = upcomingSchedule[0];
+  const nextTone = nextItem ? typeTone(nextItem.type) : typeTone('event');
 
+  // Preview the next couple of Nanny-style reminders so the parent can see when nudges would happen.
+  const nextAlerts = nextItem ? previewNannyStyleAlerts(nextItem).filter(reminder => new Date(reminder.firesAt).getTime() >= Date.now()).slice(0, 2) : [];
+
+  // Count items coming soon for the "7 days" dashboard stat.
+  const nextSevenDays = upcomingSchedule.filter(item => {
+    const start = new Date(item.startsAt).getTime();
+    return start < Date.now() + 7 * 24 * 60 * 60 * 1000;
+  });
+  // The calendar strip does not need to regenerate unless the screen remounts.
+  const calendarDays = useMemo(getCalendarDays, []);
+
+  // For this prototype, actions default to the first child.
+  // Future multi-child flows should expose explicit child selection before saving events.
+  const firstChild = children[0];
+
+  // Builds the readiness checklist from live vault data.
+  // The checklist answers: do we have a profile, is today covered, are school details present,
+  // and are medication details reviewed?
+  const readinessItems = useMemo(() => {
+    const items = [
+      {
+        id: 'profile',
+        label: firstChild ? `${firstChild.displayName} profile available` : 'Create a child profile',
+        detail: firstChild ? 'Emergency, medical, school, and contact details can be reviewed from Profiles.' : 'Add the child profile before relying on reminders.'
+      },
+      {
+        id: 'today',
+        label: todaySchedule.length ? `${todaySchedule.length} item${todaySchedule.length === 1 ? '' : 's'} scheduled today` : 'No schedule conflicts today',
+        detail: todaySchedule.length ? todaySchedule.map(item => `${formatTime(new Date(item.startsAt))} ${item.title}`).join(' | ') : 'Add anything urgent with Quick add.'
+      },
+      {
+        id: 'school',
+        label: firstChild?.school ? 'School details ready' : 'Add school details',
+        detail: firstChild?.school ? `${firstChild.school.schoolName}${firstChild.school.pickupInstructions ? ` | ${firstChild.school.pickupInstructions}` : ''}` : 'Save school, pickup, attendance, and calendar details.'
+      },
+      {
+        id: 'meds',
+        label: firstChild?.medical.medications.length ? 'Medication info reviewed' : 'No medications listed',
+        detail: firstChild?.medical.medications.length ? firstChild.medical.medications.map(med => `${med.name}${med.scheduleText ? ` (${med.scheduleText})` : ''}`).join(' | ') : 'Add medication details if reminders are needed.'
+      }
+    ];
+    return items.map(item => ({ ...item, id: readinessId(`${item.id}-${item.label}`) }));
+  }, [firstChild, todaySchedule]);
+  // Used to display the readiness completion score.
+  const completedReadiness = readinessItems.filter(item => checkedReadiness[item.id]).length;
+
+  // Looks up a child's display name for schedule cards.
+  // If an event has no childId, it is treated as applying to all children.
   const childName = (childId?: string) => children.find(child => child.id === childId)?.displayName || 'All children';
-  const setEventField = <K extends keyof EventDraft>(key: K, value: EventDraft[K]) => setEventDraft(current => ({ ...current, [key]: value }));
-  const toggleReminder = (key: 'dayBefore' | 'dayOf' | 'hourBefore') => setEventDraft(current => ({ ...current, [key]: !current[key] }));
-  const addCustomReminder = () => setEventDraft(current => ({ ...current, customReminders: [...current.customReminders, newReminderDraft()] }));
-  const updateCustomReminder = (reminderId: string, minutesBefore: string) => setEventDraft(current => ({
-    ...current,
-    customReminders: current.customReminders.map(reminder => reminder.id === reminderId ? { ...reminder, minutesBefore } : reminder)
-  }));
-  const removeCustomReminder = (reminderId: string) => setEventDraft(current => ({ ...current, customReminders: current.customReminders.filter(reminder => reminder.id !== reminderId) }));
 
-  const openEventForm = (day?: Date) => {
-    setEventDraft(defaultEventDraft(day ?? new Date()));
-    setEventFormStatus('');
-    setShowEventForm(true);
-  };
-
-  const chooseQuickEventType = (option: typeof quickEventTypes[number]) => {
-    setEventDraft(current => ({
-      ...current,
-      type: option.type,
-      title: current.title.trim() ? current.title : option.title,
-      custodyHolder: option.type === 'custody' ? current.custodyHolder || 'Parent / caregiver' : current.custodyHolder
-    }));
-  };
-
-  const buildNotificationOffsets = (): NotificationOffset[] => [
-    eventDraft.dayBefore ? 'day_before' as const : null,
-    eventDraft.dayOf ? 'day_of' as const : null,
-    eventDraft.hourBefore ? 'hour_before' as const : null,
-    ...eventDraft.customReminders.map(reminder => {
-      const minutes = Number(reminder.minutesBefore.replace(/[^0-9]/g, ''));
-      return minutes > 0 ? { customMinutesBefore: minutes } : null;
-    })
-  ].filter((offset): offset is NotificationOffset => Boolean(offset));
-
-  const saveEventDraft = () => {
-    const start = parseUsEventDateTime(eventDraft.date, eventDraft.startTime);
-    const end = eventDraft.endTime.trim() ? parseUsEventDateTime(eventDraft.date, eventDraft.endTime) : null;
-    if (!eventDraft.title.trim()) {
-      setEventFormStatus('Add an event title before saving.');
+  // Validates and saves the manual calendar form.
+  // The store receives a clean ScheduleItem shape while local draft fields are cleared afterward.
+  const addCalendarEvent = () => {
+    const startsAt = parseEventDateTime(draftDate, draftTime);
+    if (!draftTitle.trim()) {
+      setDraftError('Add a title first.');
       return;
     }
-    if (!start) {
-      setEventFormStatus('Add a valid date and start time, like 5/28/26 and 5pm.');
+    if (!startsAt) {
+      setDraftError('Use date YYYY-MM-DD and time HH:MM.');
       return;
     }
 
+    // Medication reminders need tighter timing, so they get an hour-before and 10-minute custom offset.
+    // Other events get the broader day-before, morning-of, and hour-before reminder set.
     addScheduleItem({
-      childId: eventDraft.childId || undefined,
-      type: eventDraft.type,
-      title: eventDraft.title.trim(),
-      startsAt: start.toISOString(),
-      endsAt: end ? end.toISOString() : undefined,
-      location: eventDraft.location.trim() || undefined,
-      custodyHolder: eventDraft.custodyHolder.trim() || undefined,
-      bringList: parseList(eventDraft.bringList),
-      notes: eventDraft.notes.trim() || undefined,
-      notificationOffsets: buildNotificationOffsets(),
-      source: 'text'
+      childId: children[0]?.id,
+      type: draftType,
+      title: draftTitle.trim(),
+      startsAt,
+      location: draftLocation.trim() || undefined,
+      notes: draftNotes.trim() || undefined,
+      notificationOffsets: draftType === 'medication' ? ['hour_before', { customMinutesBefore: 10 }] : ['day_before', 'day_of', 'hour_before']
     });
-    setEventDraft(defaultEventDraft(new Date(Date.now() + 24 * 60 * 60 * 1000)));
-    setShowEventForm(false);
-    setEventFormStatus('Event saved with calendar color, agenda details, and reminder choices.');
+    setDraftTitle('');
+    setDraftLocation('');
+    setDraftNotes('');
+    setDraftError('');
   };
 
+  // Creates common family events without making the parent fill out the whole form.
+  // Each quick action picks a sensible time relative to now and adds a short review note.
+  const addQuickEvent = (type: ScheduleType, title: string, hoursFromNow: number, notes?: string) => {
+    addScheduleItem({
+      childId: children[0]?.id,
+      type,
+      title,
+      startsAt: new Date(Date.now() + hoursFromNow * 60 * 60 * 1000).toISOString(),
+      notes,
+      notificationOffsets: type === 'medication' ? ['hour_before', { customMinutesBefore: 10 }] : ['day_before', 'day_of', 'hour_before']
+    });
+    setQuickStatus(`${title} added to the calendar.`);
+  };
+
+  // Schedules local device notifications for one reviewed item and reports what happened.
   const scheduleAlerts = async (itemId: string) => {
     const item = schedule.find(candidate => candidate.id === itemId);
     if (!item) return;
@@ -259,343 +270,416 @@ export function ScheduleScreen() {
     }));
   };
 
-  const removeEvent = (itemId: string, title: string) => {
-    removeScheduleItem(itemId);
-    setAlertStatus(prev => {
-      const next = { ...prev };
-      delete next[itemId];
-      return next;
-    });
-    setEventFormStatus(`Removed ${title}.`);
+  // Removes an event with a two-step confirmation to avoid accidental data loss.
+  // This is intentionally simple because schedule items are still demo/local state.
+  const requestRemove = (item: ScheduleItem) => {
+    if (pendingRemoveId === item.id) {
+      removeScheduleItem(item.id);
+      setPendingRemoveId(null);
+      setQuickStatus(`${item.title} removed from the calendar.`);
+      return;
+    }
+    setPendingRemoveId(item.id);
+    setAlertStatus(prev => ({ ...prev, [item.id]: 'Tap Remove again to confirm.' }));
   };
 
+  // Handles the quick reschedule buttons on each event card.
+  // Moving a medication clears takenAt because the dose is no longer tied to the old time.
+  const rescheduleItem = (item: ScheduleItem, mode: 'one_hour' | 'tomorrow_morning') => {
+    const currentStart = new Date(item.startsAt);
+    const nextStart = mode === 'one_hour'
+      ? new Date(currentStart.getTime() + 60 * 60 * 1000)
+      : (() => {
+          // Tomorrow morning defaults to 9:00 AM because it is a broadly safe review time
+          // for school/custody/admin tasks without implying a medical dose time.
+          const tomorrow = startOfDay(new Date());
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          tomorrow.setHours(9, 0, 0, 0);
+          return tomorrow;
+        })();
+    updateScheduleItem(item.id, { startsAt: nextStart.toISOString(), takenAt: undefined });
+    setAlertStatus(prev => ({ ...prev, [item.id]: `${item.title} moved to ${formatDayLabel(nextStart)} at ${formatTime(nextStart)}.` }));
+  };
+
+  // Render order is intentionally dashboard-first:
+  // 1. top summary and next-up event,
+  // 2. today/readiness/quick-add utilities,
+  // 3. rolling calendar strip,
+  // 4. manual add form,
+  // 5. detailed upcoming event cards,
+  // 6. reminder-rule explainer and fallback draft button.
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Schedule</Text>
-      <Text style={styles.subtitle}>Child-centered calendar for custody, school, medical, meds, events, bring-list prep, and practical reminders.</Text>
-      <Text style={styles.helper}>Tap any calendar day to add an event</Text>
-
-      <Card>
-        <Text style={styles.monthTitle}>{monthTitle(calendarMonth)}</Text>
-        <View style={styles.legendRow}>
-          {(Object.keys(typeMeta) as ScheduleType[]).map(type => (
-            <View key={type} style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: typeMeta[type].color }]} />
-              <Text style={styles.legendLabel}>{typeMeta[type].label}</Text>
-            </View>
-          ))}
+      {/* Hero identifies the tab and shows how many child profiles exist in this vault. */}
+      <View style={styles.hero}>
+        <View style={styles.heroText}>
+          <Text style={styles.eyebrow}>ParentVault Home</Text>
+          <Text style={styles.title}>Child calendar</Text>
+          <Text style={styles.subtitle}>Today, next handoff, medicine, school, and appointments at a glance.</Text>
         </View>
-        <View style={styles.weekdayRow}>{weekdayLabels.map(label => <Text key={label} style={styles.weekdayLabel}>{label}</Text>)}</View>
-        <View style={styles.monthGrid}>
-          {monthDays.map((day, index) => {
-            const key = day ? dateKey(day) : `blank-${index}`;
-            const dayEvents = day ? eventsByDate[dateKey(day)] ?? [] : [];
-            const isToday = day ? dateKey(day) === dateKey(new Date()) : false;
-            if (!day) return <View key={key} style={[styles.dayCell, styles.blankDayCell]} />;
+        <View style={[styles.childBadge, { backgroundColor: theme.primarySoft }]}>
+          <Ionicons name="people-outline" size={18} color={theme.primary} />
+          <Text style={[styles.childBadgeText, { color: theme.primary }]}>{children.length || 1}</Text>
+        </View>
+      </View>
+
+      {/* Dashboard stats give a fast scan of today's load, near-term load, and custody-specific count. */}
+      <View style={styles.statRow}>
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{todaySchedule.length}</Text>
+          <Text style={styles.statLabel}>today</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{nextSevenDays.length}</Text>
+          <Text style={styles.statLabel}>7 days</Text>
+        </View>
+        <View style={styles.statBox}>
+          <Text style={styles.statNumber}>{upcomingSchedule.filter(item => item.type === 'custody').length}</Text>
+          <Text style={styles.statLabel}>custody</Text>
+        </View>
+      </View>
+
+      {/* Color/type legend makes the calendar dots and card badges understandable. */}
+      <View style={styles.legendRow}>
+        {scheduleTypes.map(type => {
+          const tone = typeTone(type);
+          return (
+            <View key={type} style={styles.legendItem}>
+              <View style={[styles.legendIcon, { backgroundColor: theme.mode === 'dark' ? tone.darkSoft : tone.soft }]}>
+                <Ionicons name={tone.icon} size={14} color={tone.color} />
+              </View>
+              <Text style={styles.legendText}>{typeLabel({ type } as ScheduleItem)}</Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Next-up panel highlights the single most urgent upcoming item. */}
+      <View style={[styles.nextPanel, { backgroundColor: theme.mode === 'dark' ? '#0b1220' : '#eff6ff', borderColor: theme.mode === 'dark' ? '#1d4ed8' : '#bfdbfe' }]}>
+        <View style={[styles.nextIcon, { backgroundColor: theme.mode === 'dark' ? nextTone.darkSoft : nextTone.soft }]}>
+          <Ionicons name={nextTone.icon} size={28} color={nextTone.color} />
+        </View>
+        <View style={styles.nextContent}>
+          <Text style={styles.nextKicker}>Next up</Text>
+          {nextItem ? (
+            <>
+              <Text style={styles.nextTitle}>{nextItem.title}</Text>
+              <Text style={styles.nextTime}>{getRelativeDay(new Date(nextItem.startsAt))} - {formatDayLabel(new Date(nextItem.startsAt))} at {formatTime(new Date(nextItem.startsAt))}</Text>
+              <Text style={styles.nextChild}>{typeLabel(nextItem)} for {childName(nextItem.childId)}</Text>
+              {nextAlerts.length ? <Text style={styles.nextAlert}>Heads-up: {nextAlerts.map(reminder => formatTime(new Date(reminder.firesAt))).join(', ')}</Text> : null}
+            </>
+          ) : <Text style={styles.nextTime}>No upcoming items yet. Add a draft or import a document.</Text>}
+        </View>
+      </View>
+
+      {/* Today card lists only items occurring on the current local calendar day. */}
+      <Card>
+        <Text style={styles.sectionLabel}>Today</Text>
+        {todaySchedule.length ? todaySchedule.map(item => (
+          <View key={item.id} style={styles.todayRow}>
+            <View style={[styles.typeDot, { backgroundColor: typeTone(item.type).color }]} />
+            <Text style={styles.todayTime}>{formatTime(new Date(item.startsAt))}</Text>
+            <View style={styles.todayBody}>
+              <Text style={styles.name}>{item.title}</Text>
+              <Text style={styles.meta}>{typeLabel(item)} - {childName(item.childId)}</Text>
+            </View>
+          </View>
+        )) : <Text style={styles.empty}>Nothing scheduled for today.</Text>}
+      </Card>
+
+      {/* Readiness card lets the parent manually check whether the day's basics are covered. */}
+      <Card>
+        <View style={styles.readinessHeader}>
+          <View>
+            <Text style={styles.sectionLabel}>Today readiness</Text>
+            <Text style={styles.empty}>{completedReadiness} of {readinessItems.length} checked</Text>
+          </View>
+          <View style={[styles.readinessScore, { backgroundColor: completedReadiness === readinessItems.length ? '#15803d' : theme.primaryStrong }]}>
+            <Text style={styles.readinessScoreText}>{Math.round((completedReadiness / readinessItems.length) * 100)}%</Text>
+          </View>
+        </View>
+        {readinessItems.map(item => {
+          const checked = Boolean(checkedReadiness[item.id]);
+          return (
+            <Pressable
+              key={item.id}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked }}
+              // Toggle just this row while preserving the other readiness checks.
+              onPress={() => setCheckedReadiness(current => ({ ...current, [item.id]: !checked }))}
+              style={[styles.readinessRow, { borderColor: checked ? theme.primary : theme.border, backgroundColor: checked ? theme.primarySoft : theme.card }]}
+            >
+              <View style={[styles.checkCircle, { backgroundColor: checked ? theme.primaryStrong : 'transparent', borderColor: checked ? theme.primaryStrong : theme.inputBorder }]}>
+                {checked ? <Ionicons name="checkmark" size={15} color="#ffffff" /> : null}
+              </View>
+              <View style={styles.readinessText}>
+                <Text style={[styles.readinessLabel, { color: checked ? theme.primary : theme.text }]}>{item.label}</Text>
+                <Text style={styles.readinessDetail}>{item.detail}</Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </Card>
+
+      {/* Quick add creates common schedule items with one tap for repeated family workflows. */}
+      <Card>
+        <Text style={styles.sectionLabel}>Quick add</Text>
+        <Text style={styles.empty}>Common family tasks with sensible reminder timing.</Text>
+        <View style={styles.quickGrid}>
+          <PrimaryButton tone="quiet" onPress={() => addQuickEvent('custody', 'Custody pickup', 24, 'Confirm location and who is picking up.')}>Custody pickup</PrimaryButton>
+          <PrimaryButton tone="quiet" onPress={() => addQuickEvent('medication', 'Medication dose', 1, 'Confirm dose and instructions before relying on this reminder.')}>Medication dose</PrimaryButton>
+          <PrimaryButton tone="quiet" onPress={() => addQuickEvent('school', 'Pack school bag', 12, 'Check folder, water bottle, lunch, and required forms.')}>Pack school bag</PrimaryButton>
+        </View>
+        {quickStatus ? <Text style={styles.status}>{quickStatus}</Text> : null}
+      </Card>
+
+      {/* Rolling 14-day calendar strip. Each tile shows event count plus up to three color dots. */}
+      <View style={styles.calendarGrid}>
+        {calendarDays.map(date => {
+          const itemsForDay = upcomingSchedule.filter(item => isSameDay(new Date(item.startsAt), date));
+          const isToday = isSameDay(date, now);
+          // The first item for a day determines the tile border color; dots still show mixed event types.
+          const primaryTone = itemsForDay[0] ? typeTone(itemsForDay[0].type) : undefined;
+          return (
+            <View
+              key={dayKey(date)}
+              style={[
+                styles.dayTile,
+                primaryTone ? { borderColor: primaryTone.color, borderTopWidth: 4 } : null,
+                isToday ? styles.todayTile : null
+              ]}
+            >
+              <Text style={[styles.dayName, isToday ? styles.todayTileText : null]}>{date.toLocaleDateString(undefined, { weekday: 'short' })}</Text>
+              <Text style={[styles.dayNumber, isToday ? styles.todayTileText : null]}>{date.getDate()}</Text>
+              <View style={styles.dayDots}>
+                {itemsForDay.slice(0, 3).map(item => <View key={item.id} style={[styles.dayDot, { backgroundColor: isToday ? '#ffffff' : typeTone(item.type).color }]} />)}
+              </View>
+              <Text style={[styles.dayCount, isToday ? styles.todayTileText : null]}>{itemsForDay.length ? `${itemsForDay.length}` : 'Clear'}</Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {/* Manual add form for custom events that do not fit the quick-add presets. */}
+      <Card>
+        <Text style={styles.sectionLabel}>Add to calendar</Text>
+        <ThemedTextInput
+          value={draftTitle}
+          onChangeText={setDraftTitle}
+          placeholder="Event title"
+          style={styles.input}
+        />
+        <View style={styles.typePicker}>
+          {scheduleTypes.map(type => {
+            // Each type chip updates both the saved event type and the visual reminder color.
+            const selected = draftType === type;
+            const tone = typeTone(type);
             return (
-              <Pressable key={key} onPress={() => openEventForm(day)} style={[styles.dayCell, styles.clickableDayCell, isToday && styles.todayCell]}>
-                <Text style={[styles.dayNumber, isToday && styles.todayText]}>{day.getDate()}</Text>
-                {dayEvents.slice(0, 3).map(item => {
-                  const meta = typeMeta[item.type];
-                  return (
-                    <Text key={item.id} style={[styles.dayEventLabel, { backgroundColor: meta.soft, color: meta.text, borderLeftColor: meta.color }]}>{shortEventTitle(item.title)}</Text>
-                  );
-                })}
-                {dayEvents.length > 3 ? <Text style={styles.moreEvents}>+{dayEvents.length - 3} more</Text> : null}
-                <Text style={[styles.tapToAdd, dayEvents.length > 0 && styles.editOrAddLabel]}>{dayEvents.length > 0 ? '+ event' : '+ event'}</Text>
+              <Pressable
+                key={type}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                onPress={() => setDraftType(type)}
+                style={[styles.typeChoice, { borderColor: selected ? tone.color : theme.border, backgroundColor: selected ? (theme.mode === 'dark' ? tone.darkSoft : tone.soft) : theme.card }]}
+              >
+                <Ionicons name={tone.icon} size={15} color={selected ? tone.color : theme.subtle} />
+                <Text style={[styles.typeChoiceText, { color: selected ? tone.color : theme.muted }]}>{typeLabel({ type } as ScheduleItem)}</Text>
               </Pressable>
             );
           })}
         </View>
-      </Card>
-
-      <Card>
-        <Text style={styles.name}>Next up</Text>
-        {upcomingSchedule.length ? upcomingSchedule.map(item => {
-          const meta = typeMeta[item.type];
-          return (
-            <View key={item.id} style={[styles.agendaItem, { borderLeftColor: meta.color }]}>
-              <View style={styles.row}>
-                <Text style={[styles.typePill, { backgroundColor: meta.soft, color: meta.text }]}>{meta.label}</Text>
-                <Text style={styles.sourcePill}>{sourceLabel(item)}</Text>
-              </View>
-              <Text style={styles.itemTitle}>{item.title}</Text>
-              <Text style={styles.meta}>{new Date(item.startsAt).toLocaleString()} - {childName(item.childId)}</Text>
-              {item.location ? <Text style={styles.meta}>Where: {item.location}</Text> : null}
-              {item.custodyHolder ? <Text style={styles.meta}>Who has them: {item.custodyHolder}</Text> : null}
-              {item.bringList?.length ? <Text style={styles.bringList}>Bring: {item.bringList.join(', ')}</Text> : null}
-            </View>
-          );
-        }) : <Text style={styles.empty}>No upcoming events yet. Add a custody pickup, school item, or appointment from the month view.</Text>}
-      </Card>
-
-      <Card>
-        <Text style={styles.name}>Nanny-style notification rules</Text>
-        <Text>- Night before: pack and prep</Text>
-        <Text>- Morning of: get ready and check route</Text>
-        <Text>- One hour before: leave / pickup / medication warning</Text>
-        <Text>- Journal prompt after important events</Text>
-        <Text style={styles.status}>Standing reminder previews: {previewNannyStandingReminders().map(r => `${r.title} ${new Date(r.firesAt).toLocaleString()}`).join(' | ')}</Text>
-      </Card>
-
-      <AppModal
-        visible={showEventForm}
-        eyebrow="New reminder"
-        title="Add something to the family calendar"
-        description="Pick the type, fill the basics, then add only the extra details that help you leave prepared. Nothing complicated unless you need it."
-        onClose={() => {
-          setShowEventForm(false);
-          setEventDraft(defaultEventDraft(new Date(Date.now() + 24 * 60 * 60 * 1000)));
-        }}
-        footer={(
-          <>
-            <PrimaryButton onPress={saveEventDraft}>Save event</PrimaryButton>
-            <PrimaryButton tone="quiet" onPress={() => { setShowEventForm(false); setEventDraft(defaultEventDraft(new Date(Date.now() + 24 * 60 * 60 * 1000))); }}>Cancel</PrimaryButton>
-            {eventFormStatus ? <Text style={styles.status}>{eventFormStatus}</Text> : null}
-          </>
-        )}
-      >
-        <View style={styles.modalSection}>
-          <Text style={styles.sectionEyebrow}>1. Start with the type</Text>
-          <View style={styles.quickTypeGrid}>
-            {quickEventTypes.map(option => {
-              const active = eventDraft.type === option.type;
-              const meta = typeMeta[option.type];
-              return (
-                <Pressable
-                  key={option.label}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: active }}
-                  onPress={() => chooseQuickEventType(option)}
-                  style={({ pressed }) => [styles.quickTypeCard, { opacity: pressed ? 0.86 : 1 }, active && { backgroundColor: meta.soft, borderColor: meta.color }]}
-                >
-                  <View style={[styles.legendDot, { backgroundColor: meta.color }]} />
-                  <Text style={[styles.quickTypeText, active && { color: meta.text }]}>{option.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
-
-        <View style={styles.modalSection}>
-          <Text style={styles.sectionEyebrow}>2. The basics</Text>
-          <FormField
-            label="Event name"
-            helper="Use the plain thing you need to remember: pickup, therapy, dentist, meds, school break."
-            value={eventDraft.title}
-            onChangeText={value => setEventField('title', value)}
-            placeholder="Custody exchange"
-            returnKeyType="next"
+        <View style={styles.formRow}>
+          <ThemedTextInput
+            value={draftDate}
+            onChangeText={setDraftDate}
+            placeholder="YYYY-MM-DD"
+            style={[styles.input, styles.formHalf]}
           />
-
-          <Text style={styles.label}>Who is this for?</Text>
-          <View style={styles.typePicker}>
-            <ChoiceChip selected={!eventDraft.childId} onPress={() => setEventField('childId', '')}>All children</ChoiceChip>
-            {children.map(child => (
-              <ChoiceChip key={child.id} selected={eventDraft.childId === child.id} onPress={() => setEventField('childId', child.id)}>{child.displayName}</ChoiceChip>
-            ))}
-          </View>
-
-          <View style={styles.formRow}>
-            <FormField
-              label="Date"
-              helper="MM/DD/YY"
-              value={eventDraft.date}
-              onChangeText={value => setEventField('date', value)}
-              placeholder="5/28/26"
-              keyboardType="numbers-and-punctuation"
-              containerStyle={styles.formHalf}
-            />
-            <FormField
-              label="Start"
-              helper="Simple is fine"
-              value={eventDraft.startTime}
-              onChangeText={value => setEventField('startTime', value)}
-              placeholder="5pm"
-              containerStyle={styles.formHalf}
-            />
-          </View>
+          <ThemedTextInput
+            value={draftTime}
+            onChangeText={setDraftTime}
+            placeholder="HH:MM"
+            style={[styles.input, styles.formHalf]}
+          />
         </View>
+        <ThemedTextInput
+          value={draftLocation}
+          onChangeText={setDraftLocation}
+          placeholder="Location, pickup spot, or school"
+          style={styles.input}
+        />
+        <ThemedTextInput
+          value={draftNotes}
+          onChangeText={setDraftNotes}
+          placeholder="Notes"
+          multiline
+          style={[styles.input, styles.notesInput]}
+        />
+        {draftError ? <Text style={styles.error}>{draftError}</Text> : null}
+        <PrimaryButton onPress={addCalendarEvent}>Add calendar event</PrimaryButton>
+      </Card>
 
-        <View style={styles.modalSection}>
-          <Text style={styles.sectionEyebrow}>3. Helpful details</Text>
-          <FormField label="End time" optional value={eventDraft.endTime} onChangeText={value => setEventField('endTime', value)} placeholder="6pm" />
-          <FormField label="Location" optional helper="Pickup spot, office, school, or address." value={eventDraft.location} onChangeText={value => setEventField('location', value)} placeholder="School front office" />
-          <FormField label="Who has them?" optional helper="Useful for custody/exchange context." value={eventDraft.custodyHolder} onChangeText={value => setEventField('custodyHolder', value)} placeholder="Dad, Mom, caregiver, school" />
-          <FormField label="Bring list" optional helper="Comma-separated is fastest." value={eventDraft.bringList} onChangeText={value => setEventField('bringList', value)} placeholder="Backpack, meds, uniform, paperwork" />
-          <FormField label="Notes" optional helper="Keep it factual: source, confirmation, dose, pickup detail, or what to check." value={eventDraft.notes} onChangeText={value => setEventField('notes', value)} placeholder="Confirmed by text. Bring insurance card." multiline />
-        </View>
+      {/* Empty state appears only when there are no current/future schedule items. */}
+      {upcomingSchedule.length === 0 ? <Card><Text style={styles.empty}>No upcoming schedule items yet. Add an event draft or import a school/custody document.</Text></Card> : null}
 
-        <View style={styles.modalSection}>
-          <Text style={styles.sectionEyebrow}>4. Reminders</Text>
-          <Text style={styles.help}>Default reminders are already selected because leaving prepared is the point. Turn off anything you do not need.</Text>
-          <View style={styles.reminderGrid}>
-            <ChoiceChip selected={eventDraft.dayBefore} onPress={() => toggleReminder('dayBefore')}>Night before</ChoiceChip>
-            <ChoiceChip selected={eventDraft.dayOf} onPress={() => toggleReminder('dayOf')}>Morning of</ChoiceChip>
-            <ChoiceChip selected={eventDraft.hourBefore} onPress={() => toggleReminder('hourBefore')}>1 hour before</ChoiceChip>
-          </View>
-          {eventDraft.customReminders.map(reminder => (
-            <View key={reminder.id} style={styles.customReminderRow}>
-              <View style={styles.customReminderInput}>
-                <FormField
-                  label="Custom reminder"
-                  value={reminder.minutesBefore}
-                  onChangeText={value => updateCustomReminder(reminder.id, value)}
-                  placeholder="30"
-                  keyboardType="number-pad"
-                />
+      {/* Detailed cards for every current/future schedule item. */}
+      {upcomingSchedule.map(item => (
+        <Card key={item.id}>
+          {/* Top row pairs a colored date badge with the event title, child, type, and confidence label. */}
+          <View style={styles.eventCardTop}>
+            <View style={[styles.eventDateBadge, { backgroundColor: theme.mode === 'dark' ? typeTone(item.type).darkSoft : typeTone(item.type).soft }]}>
+              <Text style={[styles.eventDateMonth, { color: typeTone(item.type).color }]}>{new Date(item.startsAt).toLocaleDateString(undefined, { month: 'short' })}</Text>
+              <Text style={[styles.eventDateDay, { color: typeTone(item.type).color }]}>{new Date(item.startsAt).getDate()}</Text>
+            </View>
+            <View style={styles.eventCardBody}>
+              <View style={styles.row}>
+                <View style={[styles.pill, { backgroundColor: theme.mode === 'dark' ? typeTone(item.type).darkSoft : typeTone(item.type).soft }]}>
+                  <Ionicons name={typeTone(item.type).icon} size={14} color={typeTone(item.type).color} />
+                  <Text style={[styles.type, { color: typeTone(item.type).color }]}>{typeLabel(item)}</Text>
+                </View>
+                <Text style={styles.confidence}>{item.confidence ? `${Math.round(item.confidence * 100)}% reviewed` : 'manual'}</Text>
               </View>
-              <PrimaryButton tone="quiet" onPress={() => removeCustomReminder(reminder.id)}>Remove</PrimaryButton>
-            </View>
-          ))}
-          <PrimaryButton tone="quiet" onPress={addCustomReminder}>+ Add custom reminder</PrimaryButton>
-          <Text style={styles.reminderPreview}>Selected: {buildNotificationOffsets().map(reminderLabel).join(', ') || 'No reminders selected'}</Text>
-        </View>
-      </AppModal>      {!showEventForm && eventFormStatus ? <Text style={styles.status}>{eventFormStatus}</Text> : null}
-
-      {sortedSchedule.length === 0 && showOnboarding ? (
-        <Card>
-          <View style={styles.nannyRow}>
-            <View style={styles.nannyAvatar}><Text style={styles.nannyFace}>NS</Text></View>
-            <View style={styles.nannyBubble}>
-              <Text style={styles.nannyName}>Nanny Nova</Text>
-              <Text style={styles.nannyEyebrow}>Getting started</Text>
-              <Text style={styles.nannyTitle}>Build the calendar around the child</Text>
-              <Text style={styles.nannyBody}>{onboardingTips[onboardingStep]}</Text>
+              <Text style={styles.name}>{item.title}</Text>
+              <Text style={styles.meta}>{childName(item.childId)}</Text>
+              <Text style={styles.dateLine}>{formatDayLabel(new Date(item.startsAt))} at {formatTime(new Date(item.startsAt))}</Text>
             </View>
           </View>
-          <View style={styles.progressDots}>{onboardingTips.map((_, index) => <View key={index} style={[styles.dot, index === onboardingStep && styles.activeDot]} />)}</View>
-          <PrimaryButton tone="quiet" onPress={() => setShowOnboarding(false)}>Hide guide</PrimaryButton>
+          {item.location ? <Text>{item.location}</Text> : null}
+          {item.notes ? <Text style={styles.notes}>{item.notes}</Text> : null}
+          <Text style={styles.alerts}>Saved alerts: {item.notificationOffsets.map(formatOffset).join(', ')}</Text>
+          <Text style={styles.alerts}>Smart reminder preview: {previewNannyStyleAlerts(item).map(reminder => `${reminder.kind} ${new Date(reminder.firesAt).toLocaleString()}`).join(' - ') || 'none in future'}</Text>
+          <View style={styles.actionGrid}>
+            <PrimaryButton tone="quiet" onPress={() => rescheduleItem(item, 'one_hour')}>Move +1 hour</PrimaryButton>
+            <PrimaryButton tone="quiet" onPress={() => rescheduleItem(item, 'tomorrow_morning')}>Move to tomorrow</PrimaryButton>
+          </View>
+          {/* Medication events can be marked taken; other event types skip this action. */}
+          {item.type === 'medication' ? (
+            item.takenAt ? <Text style={styles.taken}>Taken at {new Date(item.takenAt).toLocaleTimeString()}</Text> : <PrimaryButton onPress={() => markMedicationTaken(item.id)}>Mark as taken</PrimaryButton>
+          ) : null}
+          <PrimaryButton tone="quiet" onPress={() => scheduleAlerts(item.id)}>Schedule local alerts</PrimaryButton>
+          {/* Delete uses a two-tap confirmation and switches to danger styling once armed. */}
+          <PrimaryButton tone={pendingRemoveId === item.id ? 'danger' : 'quiet'} onPress={() => requestRemove(item)}>
+            {pendingRemoveId === item.id ? 'Confirm remove' : 'Remove from calendar'}
+          </PrimaryButton>
+          {alertStatus[item.id] ? <Text style={styles.status}>{alertStatus[item.id]}</Text> : null}
         </Card>
-      ) : null}
-
-      {sortedSchedule.map(item => {
-        const meta = typeMeta[item.type];
-        return (
-          <Card key={item.id}>
-            <View style={styles.row}>
-              <Text style={[styles.typePill, { backgroundColor: meta.soft, color: meta.text }]}>{meta.label}</Text>
-              <Text style={styles.sourcePill}>{sourceLabel(item)}</Text>
-            </View>
-            <Text style={styles.itemTitle}>{item.title}</Text>
-            {showOnboarding && item.type === 'event' && onboardingStep < onboardingTips.length ? <Text style={styles.tip}>{onboardingTips[onboardingStep]}</Text> : null}
-            <Text style={styles.meta}>{childName(item.childId)}</Text>
-            <Text>{new Date(item.startsAt).toLocaleString()}</Text>
-            {item.location ? <Text>Where: {item.location}</Text> : null}
-            {item.custodyHolder ? <Text>Who has them: {item.custodyHolder}</Text> : null}
-            {item.bringList?.length ? <Text style={styles.bringList}>Bring: {item.bringList.join(', ')}</Text> : null}
-            {item.notes ? <Text style={styles.notes}>{item.notes}</Text> : null}
-            <Text style={styles.alerts}>Reminders: {item.notificationOffsets.map(formatOffset).join(', ') || 'none'}</Text>
-            <Text style={styles.alerts}>Planned Nanny-style alerts: {previewNannyStyleAlerts(item).map(reminder => `${reminder.kind} ${new Date(reminder.firesAt).toLocaleString()}`).join(' | ') || 'none in future'}</Text>
-            {item.type === 'medication' ? (item.takenAt ? <Text style={styles.taken}>Taken at {new Date(item.takenAt).toLocaleTimeString()}</Text> : <PrimaryButton onPress={() => markMedicationTaken(item.id)}>Mark as taken</PrimaryButton>) : null}
-            <View style={styles.eventActionRow}>
-              <View style={styles.eventActionButton}><PrimaryButton tone="quiet" onPress={() => scheduleAlerts(item.id)}>Schedule local alerts</PrimaryButton></View>
-              <View style={styles.eventActionButton}><PrimaryButton tone="danger" onPress={() => removeEvent(item.id, item.title)}>Remove event</PrimaryButton></View>
-            </View>
-            {alertStatus[item.id] ? <Text style={styles.status}>{alertStatus[item.id]}</Text> : null}
-          </Card>
-        );
-      })}
-
-      <View style={styles.onboardingButtons}>
-        {showOnboarding ? (
-          <>
-            <PrimaryButton tone="quiet" onPress={() => setShowOnboarding(false)}>Hide guide</PrimaryButton>
-            <PrimaryButton disabled={onboardingStep === onboardingTips.length - 1} onPress={() => setOnboardingStep(step => Math.min(step + 1, onboardingTips.length - 1))}>Next tip</PrimaryButton>
-          </>
-        ) : null}
-      </View>
-
-      <View style={styles.bottomEventCta}>
-        <Text style={styles.bottomEventTitle}>Need to add something?</Text>
-        <Text style={styles.bottomEventHelp}>Tap here anytime to create an event, reminder, appointment, school item, or custody note.</Text>
-        <PrimaryButton onPress={() => openEventForm()}>+ Add Event</PrimaryButton>
-      </View>
+      ))}
+      {/* Reminder-rule explainer shows the default reminder logic behind the preview text above. */}
+      <Card>
+        <Text style={styles.sectionLabel}>Nanny-style reminder rules</Text>
+        <Text style={styles.ruleText}>Day-before 7:00 PM. Day-of 7:00 AM, or 4:57 AM for early events. One hour before event start.</Text>
+        <Text style={styles.ruleText}>Pickup reminders: 3:45 PM on school days, 5:45 PM on no-school days. Journal prompt: 8:45 PM.</Text>
+        <Text style={styles.status}>Standing reminder previews: {previewNannyStandingReminders().map(r => `${r.title} ${new Date(r.firesAt).toLocaleString()}`).join(' - ')}</Text>
+      </Card>
+      {/* Fallback draft button for quickly seeding an event and editing it later. */}
+      <PrimaryButton onPress={() => addScheduleItem({
+        childId: children[0]?.id,
+        type: 'event',
+        title: 'New event draft',
+        startsAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        notificationOffsets: ['day_before', 'day_of', 'hour_before']
+      })}>Add event draft</PrimaryButton>
     </ScrollView>
   );
 }
 
+// Screen-specific styles for the Schedule tab only.
+// Styles are grouped roughly in the same order as the JSX above so future edits are easier to trace.
 const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
-  container: { padding: 18, paddingBottom: 34, backgroundColor: theme.app },
-  title: { fontSize: 36, fontWeight: '900', color: theme.text, letterSpacing: -0.8, marginTop: 4 },
-  subtitle: { color: theme.text, marginTop: 6, marginBottom: 18, lineHeight: 24, fontSize: 16, fontWeight: '700' },
-  helper: { color: theme.mode === 'light' ? '#ffffff' : theme.primary, fontWeight: '900', marginBottom: 24, textAlign: 'center', backgroundColor: theme.mode === 'light' ? theme.primaryStrong : theme.primarySoft, borderRadius: 999, paddingVertical: 10, paddingHorizontal: 12, overflow: 'hidden' },
-  help: { color: theme.text, marginTop: 6, marginBottom: 10, lineHeight: 22, fontSize: 16, fontWeight: '600' },
-  modalSection: { marginTop: 4, marginBottom: 12, padding: 12, borderRadius: 20, backgroundColor: theme.mode === 'light' ? '#f8fafc' : theme.surface, borderWidth: 1, borderColor: theme.border },
-  sectionEyebrow: { color: theme.primary, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.7, fontSize: 12, marginBottom: 2 },
-  label: { color: theme.text, fontWeight: '900', fontSize: 16, marginTop: 12, marginBottom: 4 },
+  // Overall scroll padding.
+  container: { padding: 20, paddingBottom: 32 },
+
+  // Hero/header layout.
+  hero: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 12 },
+  heroText: { flex: 1 },
+  eyebrow: { color: theme.primary, fontWeight: '800', textTransform: 'uppercase', fontSize: 12, marginBottom: 4 },
+  title: { fontSize: 30, fontWeight: '800', color: theme.text },
+  subtitle: { color: theme.muted, marginBottom: 16 },
+  childBadge: { minWidth: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  childBadgeText: { fontSize: 12, fontWeight: '900', marginTop: 1 },
+
+  // Summary stat cards.
+  statRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  statBox: { flex: 1, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.card, borderRadius: 14, padding: 12 },
+  statNumber: { color: theme.text, fontSize: 22, fontWeight: '900' },
+  statLabel: { color: theme.subtle, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
+
+  // Event type legend.
+  legendRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.card, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 6 },
+  legendIcon: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  legendText: { color: theme.muted, fontSize: 12, fontWeight: '800' },
+
+  // Next-up feature panel.
+  nextPanel: { borderWidth: 1, borderRadius: 18, padding: 16, flexDirection: 'row', gap: 14, marginBottom: 12 },
+  nextIcon: { width: 58, height: 58, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  nextContent: { flex: 1 },
+  nextKicker: { color: theme.primary, fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
+  nextTitle: { color: theme.text, fontSize: 22, lineHeight: 27, fontWeight: '900', marginTop: 3 },
+  nextTime: { color: theme.text, fontWeight: '800', marginTop: 6 },
+  nextChild: { color: theme.muted, marginTop: 3 },
+  nextAlert: { color: theme.primary, fontWeight: '800', marginTop: 8 },
+
+  // Shared text and today's list.
+  sectionLabel: { color: theme.primary, fontWeight: '800', fontSize: 13, textTransform: 'uppercase', marginBottom: 6 },
   empty: { color: theme.muted },
-  input: { minHeight: 50, borderRadius: 16, borderWidth: 2, borderColor: theme.inputBorder, padding: 12, backgroundColor: theme.input, marginTop: 8, color: theme.text, fontSize: 16, fontWeight: '700' },
-  textArea: { minHeight: 104, borderRadius: 16, borderWidth: 2, borderColor: theme.inputBorder, padding: 12, backgroundColor: theme.input, marginTop: 8, color: theme.text, fontSize: 16, fontWeight: '700', textAlignVertical: 'top' },
+  todayRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.border },
+  typeDot: { width: 8, height: 8, borderRadius: 4 },
+  todayTime: { color: theme.primary, fontWeight: '800', minWidth: 72 },
+  todayBody: { flex: 1 },
+
+  // Readiness checklist.
+  readinessHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  readinessScore: { width: 48, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  readinessScoreText: { color: '#ffffff', fontWeight: '900' },
+  readinessRow: { flexDirection: 'row', gap: 10, borderWidth: 1, borderRadius: 8, padding: 10, marginTop: 8 },
+  checkCircle: { width: 24, height: 24, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  readinessText: { flex: 1 },
+  readinessLabel: { fontWeight: '900' },
+  readinessDetail: { color: theme.muted, marginTop: 2 },
+
+  // Quick-add and 14-day calendar strip.
+  calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  quickGrid: { gap: 4, marginTop: 8 },
+  dayTile: { width: '23%', minHeight: 84, borderRadius: 12, borderWidth: 1, borderColor: theme.border, backgroundColor: theme.card, padding: 10, justifyContent: 'space-between' },
+  todayTile: { backgroundColor: theme.primaryStrong, borderColor: theme.primaryStrong },
+  todayTileText: { color: '#ffffff' },
+  dayName: { color: theme.subtle, fontWeight: '800', fontSize: 12 },
+  dayNumber: { color: theme.text, fontSize: 22, fontWeight: '800' },
+  dayDots: { flexDirection: 'row', gap: 4, minHeight: 8 },
+  dayDot: { width: 8, height: 8, borderRadius: 4 },
+  dayCount: { color: theme.muted, fontSize: 11, fontWeight: '700' },
+
+  // Add-event form controls.
+  typePicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8, marginBottom: 4 },
+  typeChoice: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7 },
+  typeChoiceText: { fontSize: 12, fontWeight: '900', textTransform: 'capitalize' },
   formRow: { flexDirection: 'row', gap: 8 },
   formHalf: { flex: 1 },
-  typePicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 },
-  quickTypeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-  quickTypeCard: { minWidth: '30%', flexGrow: 1, borderWidth: 2, borderColor: theme.border, backgroundColor: theme.surface, borderRadius: 18, paddingHorizontal: 12, paddingVertical: 14, alignItems: 'center', gap: 6 },
-  quickTypeText: { color: theme.text, fontWeight: '900' },
-  typeChip: { borderWidth: 2, borderColor: theme.border, backgroundColor: theme.input, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 9 },
-  typeChipActive: { backgroundColor: theme.primarySoft, borderColor: theme.primary },
-  typeChipText: { color: theme.text, fontWeight: '800' },
-  typeChipTextActive: { color: theme.primary },
-  reminderGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  reminderCard: { flexGrow: 1, minWidth: '30%', borderWidth: 2, borderColor: theme.border, backgroundColor: theme.input, borderRadius: 18, paddingHorizontal: 10, paddingVertical: 14, alignItems: 'center' },
-  reminderCardActive: { backgroundColor: theme.primarySoft, borderColor: theme.primary },
-  reminderCardText: { color: theme.text, fontWeight: '900', textAlign: 'center' },
-  reminderCardTextActive: { color: theme.primary },
-  customReminderRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
-  customReminderInput: { flex: 1 },
-  reminderPreview: { color: theme.primary, fontWeight: '800', marginTop: 10 },
-  monthTitle: { color: theme.text, fontSize: 24, fontWeight: '900', marginBottom: 12, textAlign: 'center' },
-  legendRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 12 },
-  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: theme.input, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 5 },
-  legendDot: { width: 9, height: 9, borderRadius: 5 },
-  legendLabel: { color: theme.muted, fontSize: 11, fontWeight: '800' },
-  weekdayRow: { flexDirection: 'row', marginBottom: 6 },
-  weekdayLabel: { flex: 1, color: theme.muted, fontSize: 12, fontWeight: '900', textAlign: 'center' },
-  monthGrid: { flexDirection: 'row', flexWrap: 'wrap', borderTopWidth: 2, borderLeftWidth: 2, borderColor: theme.border, borderRadius: 18, overflow: 'hidden' },
-  dayCell: { width: '14.2857%', minHeight: 88, borderRightWidth: 2, borderBottomWidth: 2, borderColor: theme.border, padding: 5, backgroundColor: theme.surface },
-  clickableDayCell: { backgroundColor: theme.mode === 'light' ? '#ffffff' : theme.input },
-  blankDayCell: { backgroundColor: theme.elevated, opacity: 0.45 },
-  todayCell: { backgroundColor: theme.primarySoft },
-  dayNumber: { color: theme.text, fontSize: 14, fontWeight: '900', marginBottom: 3 },
-  todayText: { color: theme.primary },
-  dayEventLabel: { borderLeftWidth: 3, borderRadius: 7, paddingHorizontal: 4, paddingVertical: 3, fontSize: 11, fontWeight: '900', marginTop: 2, overflow: 'hidden' },
-  moreEvents: { color: theme.muted, fontSize: 11, fontWeight: '800', marginTop: 2 },
-  tapToAdd: { color: theme.muted, fontSize: 11, fontWeight: '900', marginTop: 8 },
-  editOrAddLabel: { color: theme.primary, backgroundColor: theme.primarySoft, borderRadius: 6, paddingHorizontal: 4, paddingVertical: 2 },
-  agendaItem: { borderLeftWidth: 5, borderRadius: 16, backgroundColor: theme.mode === 'light' ? '#fffbf5' : theme.input, padding: 12, marginTop: 10 },
-  typePill: { alignSelf: 'flex-start', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, fontSize: 12, fontWeight: '900', overflow: 'hidden' },
-  sourcePill: { color: theme.text, fontSize: 12, fontWeight: '900' },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.55)', justifyContent: 'center', padding: 16 },
-  eventPopup: { maxHeight: '92%', borderRadius: 28, backgroundColor: theme.card, borderWidth: 1, borderColor: theme.border, overflow: 'hidden', shadowColor: theme.shadow, shadowOpacity: theme.mode === 'light' ? 0.12 : 0.3, shadowRadius: 24, shadowOffset: { width: 0, height: 12 }, elevation: 8 },
-  eventPopupContent: { padding: 18, paddingBottom: 24 },
-  popupEyebrow: { color: theme.primary, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.8, fontSize: 12 },
-  popupTitle: { color: theme.text, fontSize: 24, fontWeight: '900', marginTop: 4 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  input: { minHeight: 44 },
+  notesInput: { minHeight: 78, textAlignVertical: 'top' },
+  error: { color: theme.warning, fontWeight: '800', marginTop: 8 },
+
+  // Upcoming event cards.
+  row: { flexDirection: 'row', justifyContent: 'space-between' },
+  actionGrid: { gap: 4, marginTop: 8 },
+  eventCardTop: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  eventDateBadge: { width: 54, minHeight: 60, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  eventDateMonth: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  eventDateDay: { fontSize: 23, fontWeight: '900', marginTop: 1 },
+  eventCardBody: { flex: 1 },
+  pill: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, paddingHorizontal: 9, paddingVertical: 5 },
+  type: { fontWeight: '900', fontSize: 12 },
+  confidence: { color: theme.subtle, fontSize: 12 },
   name: { fontSize: 19, fontWeight: '800', marginTop: 4, color: theme.text },
-  meta: { color: theme.muted, marginTop: 3, fontWeight: '700' },
-  bringList: { color: theme.primary, fontWeight: '800', marginTop: 6 },
-  notes: { color: theme.text, marginTop: 8, fontWeight: '600' },
-  alerts: { color: theme.text, marginTop: 8, fontWeight: '600' },
+  meta: { color: theme.subtle, marginBottom: 4 },
+  nextMeta: { color: theme.text, fontWeight: '700', marginTop: 6 },
+  dateLine: { color: theme.text, fontWeight: '700' },
+  notes: { color: theme.muted, marginTop: 8 },
+  alerts: { color: theme.muted, marginTop: 8 },
+  ruleText: { color: theme.muted, marginTop: 4 },
   taken: { color: '#15803d', fontWeight: '800', marginTop: 8 },
-  status: { color: theme.primary, fontWeight: '700', marginTop: 8 },
-  nannyRow: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
-  nannyAvatar: { width: 64, height: 64, borderRadius: 24, alignItems: 'center', justifyContent: 'center', backgroundColor: '#e0f2fe', borderWidth: 2, borderColor: '#38bdf8' },
-  nannyFace: { fontSize: 36 },
-  nannyBubble: { flex: 1, backgroundColor: theme.primarySoft, borderRadius: 18, padding: 12, borderWidth: 2, borderColor: theme.mode === 'light' ? theme.primary : theme.border },
-  nannyName: { color: theme.primary, fontWeight: '900', marginBottom: 2 },
-  nannyEyebrow: { color: theme.text, fontWeight: '900', fontSize: 12, textTransform: 'uppercase' },
-  nannyTitle: { color: theme.text, fontWeight: '900', fontSize: 17, marginTop: 4 },
-  nannyBody: { color: theme.text, marginTop: 6, lineHeight: 20, fontWeight: '600' },
-  progressDots: { flexDirection: 'row', gap: 6, marginTop: 12, justifyContent: 'center' },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#cbd5e1' },
-  activeDot: { backgroundColor: theme.primary, width: 18 },
-  itemTitle: { color: theme.text, fontWeight: '900', fontSize: 17, marginTop: 6 },
-  onboardingButtons: { marginTop: 12, gap: 8 },
-  eventActionRow: { flexDirection: 'row', gap: 8, alignItems: 'center', marginTop: 4 },
-  eventActionButton: { flex: 1 },
-  bottomEventCta: { marginTop: 18, padding: 18, borderRadius: 26, backgroundColor: theme.mode === 'light' ? '#ffffff' : theme.primarySoft, borderWidth: 2, borderColor: theme.primary, gap: 8, shadowColor: theme.shadow, shadowOpacity: theme.mode === 'light' ? 0.14 : 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 3 },
-  bottomEventTitle: { color: theme.text, fontSize: 20, fontWeight: '900', textAlign: 'center' },
-  bottomEventHelp: { color: theme.muted, textAlign: 'center', lineHeight: 20, fontSize: 15 },
-  tip: { color: theme.primary, fontWeight: '700', fontSize: 13, marginTop: 6 }
+
+  // Generic status/confirmation text.
+  status: { color: theme.primary, fontWeight: '700', marginTop: 8 }
 });

@@ -9,15 +9,17 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { AuthSecuritySettings, SecondFactorMethod, TwoFactorChallenge } from '@parentvault/shared';
 
+// Demo in-memory challenge store. Production should use an auth provider or short-lived secure store.
 const challenges = new Map<string, { challenge: TwoFactorChallenge; codeHash: string }>();
 
+// Default security settings for the demo account returned by API settings endpoints.
 export function defaultAuthSecuritySettings(accountId: string): AuthSecuritySettings {
   return {
     accountId,
@@ -33,6 +35,7 @@ export function defaultAuthSecuritySettings(accountId: string): AuthSecuritySett
 }
 
 export function createTwoFactorChallenge(method: SecondFactorMethod): { challenge: TwoFactorChallenge; demoCode: string } {
+  // Demo code is returned to the caller for testing. Production must never return the code.
   const demoCode = String(Math.floor(100000 + Math.random() * 900000));
   const challenge: TwoFactorChallenge = {
     id: randomUUID(),
@@ -45,6 +48,7 @@ export function createTwoFactorChallenge(method: SecondFactorMethod): { challeng
 }
 
 export function verifyTwoFactorChallenge(challengeId: string, code: string): TwoFactorChallenge | undefined {
+  // Missing, expired, or mismatched challenges all fail without revealing which part was wrong.
   const stored = challenges.get(challengeId);
   if (!stored) return undefined;
   if (new Date(stored.challenge.expiresAt).getTime() < Date.now()) {
@@ -52,6 +56,7 @@ export function verifyTwoFactorChallenge(challengeId: string, code: string): Two
     return undefined;
   }
 
+  // timingSafeEqual avoids basic timing leaks for demo verification.
   const expected = Buffer.from(stored.codeHash);
   const actual = Buffer.from(hashDemoCode(code));
   if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return undefined;

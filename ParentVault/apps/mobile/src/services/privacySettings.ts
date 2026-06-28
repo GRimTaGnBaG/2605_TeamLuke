@@ -9,7 +9,7 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
@@ -17,8 +17,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ParentVaultFeature, PrivacyFeatureSettings } from '@parentvault/shared';
 
 const KEY = 'parentvault.privacy.feature-settings';
+// Shared timestamp helper for settings updates.
 const now = () => new Date().toISOString();
 
+// Full-feature default for the prototype so users can explore the whole app.
 export const defaultEnabledFeatures: ParentVaultFeature[] = [
   'schedule_reminders',
   'child_profile',
@@ -34,6 +36,7 @@ export const defaultEnabledFeatures: ParentVaultFeature[] = [
 ];
 
 export function defaultPrivacyFeatureSettings(): PrivacyFeatureSettings {
+  // Default mode allows optional prompts and enrichment while still requiring user review.
   return {
     accountId: 'local-demo-account',
     enabledFeatures: defaultEnabledFeatures,
@@ -47,6 +50,7 @@ export function defaultPrivacyFeatureSettings(): PrivacyFeatureSettings {
 }
 
 export function scheduleOnlyPrivacySettings(): PrivacyFeatureSettings {
+  // Minimal mode keeps reminders available and declines all optional vault data categories.
   return {
     accountId: 'local-demo-account',
     enabledFeatures: ['schedule_reminders'],
@@ -60,19 +64,23 @@ export function scheduleOnlyPrivacySettings(): PrivacyFeatureSettings {
 }
 
 export async function loadPrivacyFeatureSettings(): Promise<PrivacyFeatureSettings> {
+  // Missing settings fall back to the prototype default.
   const raw = await AsyncStorage.getItem(KEY);
   return raw ? JSON.parse(raw) as PrivacyFeatureSettings : defaultPrivacyFeatureSettings();
 }
 
 export async function savePrivacyFeatureSettings(settings: PrivacyFeatureSettings) {
+  // Always refresh updatedAt when persisting privacy settings.
   await AsyncStorage.setItem(KEY, JSON.stringify({ ...settings, updatedAt: now() }));
 }
 
 export function isFeatureEnabled(settings: PrivacyFeatureSettings, feature: ParentVaultFeature) {
+  // A feature must be enabled and not explicitly declined.
   return settings.enabledFeatures.includes(feature) && !settings.declinedFeatures.includes(feature);
 }
 
 export function setFeatureEnabled(settings: PrivacyFeatureSettings, feature: ParentVaultFeature, enabled: boolean): PrivacyFeatureSettings {
+  // Keep enabled/declined lists mutually exclusive when toggling.
   const enabledFeatures = enabled ? Array.from(new Set([...settings.enabledFeatures, feature])) : settings.enabledFeatures.filter(candidate => candidate !== feature);
   const declinedFeatures = enabled ? settings.declinedFeatures.filter(candidate => candidate !== feature) : Array.from(new Set([...settings.declinedFeatures, feature]));
   return {

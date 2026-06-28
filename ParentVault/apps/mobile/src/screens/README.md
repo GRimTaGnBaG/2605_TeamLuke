@@ -9,7 +9,7 @@ Each bottom tab has its own screen file. If you want to change a tab, start here
 | Chat | `ChatScreen.tsx` | Natural-language command center and quick updates |
 | Import | `ImportScreen.tsx` | Paste/import documents, screenshots, PDFs, school notes, custody notes |
 | Journal | `JournalScreen.tsx` | Factual notes, incidents, tags, evidence-style records |
-| Settings | `SecurityScreen.tsx` | Privacy, security, theme, and safety settings |
+| Settings | `SecurityScreen.tsx` | Privacy, security, theme, prototype safety settings |
 | Onboarding | `OnboardingScreen.tsx` | First-run setup before the main tabs unlock |
 
 ## Where tab navigation lives

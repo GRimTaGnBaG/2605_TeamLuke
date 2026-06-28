@@ -9,11 +9,12 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import { registerRootComponent } from 'expo';
 import App from './App';
 
+// Expo wraps App with the platform-specific root registration needed for native/web builds.
 registerRootComponent(App);

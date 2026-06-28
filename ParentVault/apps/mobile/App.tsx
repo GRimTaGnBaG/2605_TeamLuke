@@ -16,19 +16,17 @@
 
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaView, StyleSheet, View } from 'react-native';
 import { AppHeader } from './src/components/AppHeader';
 import { AppLoading } from './src/components/AppLoading';
 import { BottomTabBar } from './src/components/BottomTabBar';
 import { appTabs, defaultTab, type TabKey } from './src/navigation/tabs';
 import { OnboardingScreen } from './src/screens/OnboardingScreen';
-import { applyLocalSeedFromQueryIfRequested } from './src/services/localSeed';
 import { useVaultStore } from './src/store/vaultStore';
 import { ThemeProvider, useTheme } from './src/theme';
 
 export default function App() {
+  // Theme mode lives in the vault store so Settings can change it globally.
   const themeMode = useVaultStore(state => state.themeMode);
 
   return (
@@ -39,6 +37,7 @@ export default function App() {
 }
 
 function ParentVaultApp() {
+  // activeTab is the only navigation state in this lightweight custom tab shell.
   const [activeTab, setActiveTab] = useState<TabKey>(defaultTab);
   const theme = useTheme();
   const onboardingLoaded = useVaultStore(state => state.onboardingLoaded);
@@ -53,44 +52,28 @@ function ParentVaultApp() {
   );
 
   useEffect(() => {
-    const loadFreshState = async () => {
-      // Development/demo reset: open the web app with ?reset=1 to clear saved ParentVault data
-      // and return to the same first-start onboarding a new user would see.
-      if (__DEV__ && typeof window !== 'undefined') {
-        const url = new URL(window.location.href);
-        if (url.searchParams.get('reset') === '1') {
-          const keys = await AsyncStorage.getAllKeys();
-          await AsyncStorage.multiRemove(keys.filter(key => key.startsWith('parentvault')));
-          url.searchParams.delete('reset');
-          window.history.replaceState({}, '', url.toString());
-        }
-      }
-
-      // Development/local testing seed: open with ?seedLocal=1 to import an ignored local JSON file.
-      // This keeps private child test data out of GitHub while still making browser testing fast.
-      await applyLocalSeedFromQueryIfRequested();
-
-      await loadOnboardingStatus();
-    };
-
-    void loadFreshState();
+    // Load persisted onboarding/theme status once when the shell mounts.
+    void loadOnboardingStatus();
   }, [loadOnboardingStatus]);
 
   return (
-    <SafeAreaProvider>
-      <SafeAreaView style={[styles.app, { backgroundColor: theme.app }]}>
-        <StatusBar style={theme.mode === 'dark' ? 'light' : 'dark'} />
-        <AppHeader />
-        <View style={styles.content}>
-          {!onboardingLoaded ? <AppLoading /> : onboardingCompleted ? <ActiveScreen /> : <OnboardingScreen />}
-        </View>
-        {onboardingCompleted ? <BottomTabBar tabs={appTabs} activeTab={activeTab} onChangeTab={setActiveTab} /> : null}
-      </SafeAreaView>
-    </SafeAreaProvider>
+    <SafeAreaView style={[styles.app, { backgroundColor: theme.app }]}>
+      <StatusBar style={theme.mode === 'dark' ? 'light' : 'dark'} />
+      {/* Global header stays visible on every main/onboarding screen. */}
+      <AppHeader />
+      <View style={styles.content}>
+        {/* Gate the main tabs behind onboarding; show loading while AsyncStorage is being read. */}
+        {!onboardingLoaded ? <AppLoading /> : onboardingCompleted ? <ActiveScreen /> : <OnboardingScreen />}
+      </View>
+      {/* Bottom tabs are hidden during onboarding so setup stays focused. */}
+      {onboardingCompleted ? <BottomTabBar tabs={appTabs} activeTab={activeTab} onChangeTab={setActiveTab} /> : null}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  // Root takes the whole safe area.
   app: { flex: 1 },
+  // Content expands between header and bottom tabs.
   content: { flex: 1 }
 });

@@ -9,7 +9,7 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
@@ -25,12 +25,15 @@ import type {
 
 export type BackendMode = 'cloud' | 'self-hosted';
 
+// Public backend mode metadata used by health/debug endpoints.
 export interface BackendInfo {
   mode: BackendMode;
   storage: 'memory' | 'database';
   pairingEnabled: boolean;
 }
 
+// Storage adapter contract for the API layer.
+// Routes call this interface so storage can later move from memory to a database/cloud service.
 export interface VaultBackend {
   info(): BackendInfo;
 
@@ -55,18 +58,22 @@ export interface VaultBackend {
   createImportSuggestion(input: { sourceType: ImportSourceType; label?: string; consent: boolean }): Promise<ImportSuggestion>;
 }
 
+// Shared timestamp/id helpers for the memory backend.
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}_${randomUUID()}`;
 
+// Applies only defined fields so PATCH requests can omit unchanged fields.
 function applyDefined<T extends object>(target: T, patch: Partial<T>): T {
   return Object.assign(target, Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)));
 }
 
 export class MemoryVaultBackend implements VaultBackend {
+  // In-memory maps are prototype-only and reset when the process restarts.
   private profiles = new Map<ID, ChildProfile>();
   private schedule = new Map<ID, ScheduleItem>();
   private journal = new Map<ID, JournalEntry>();
 
+  // backendInfo records whether this instance is pretending to be cloud or self-hosted.
   constructor(private readonly backendInfo: BackendInfo) {}
 
   info(): BackendInfo {
@@ -82,12 +89,14 @@ export class MemoryVaultBackend implements VaultBackend {
   }
 
   async createProfile(input: Omit<ChildProfile, 'id' | 'updatedAt'>): Promise<ChildProfile> {
+    // API owns id/updatedAt so clients cannot spoof server-controlled profile metadata.
     const profile: ChildProfile = { ...input, id: id('child'), updatedAt: now() };
     this.profiles.set(profile.id, profile);
     return profile;
   }
 
   async updateProfile(profileId: ID, patch: Partial<Omit<ChildProfile, 'id'>>): Promise<ChildProfile | undefined> {
+    // Missing profiles return undefined so the route can produce a 404.
     const current = this.profiles.get(profileId);
     if (!current) return undefined;
     const updated = applyDefined({ ...current }, { ...patch, updatedAt: now() });
@@ -108,12 +117,14 @@ export class MemoryVaultBackend implements VaultBackend {
   }
 
   async createScheduleItem(input: Omit<ScheduleItem, 'id'>): Promise<ScheduleItem> {
+    // Schedule ids are assigned by the backend adapter.
     const item: ScheduleItem = { ...input, id: id('schedule') };
     this.schedule.set(item.id, item);
     return item;
   }
 
   async updateScheduleItem(scheduleId: ID, patch: Partial<Omit<ScheduleItem, 'id'>>): Promise<ScheduleItem | undefined> {
+    // Undefined fields are ignored so partial updates do not erase existing schedule details.
     const current = this.schedule.get(scheduleId);
     if (!current) return undefined;
     const updated: ScheduleItem = { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
@@ -134,6 +145,7 @@ export class MemoryVaultBackend implements VaultBackend {
   }
 
   async createJournalEntry(input: Omit<JournalEntry, 'id'>): Promise<JournalEntry> {
+    // Journal entries keep their caller-provided audit metadata but receive a backend id.
     const entry: JournalEntry = { ...input, id: id('journal') };
     this.journal.set(entry.id, entry);
     return entry;
@@ -152,26 +164,38 @@ export class MemoryVaultBackend implements VaultBackend {
   }
 
   async createImportSuggestion(input: { sourceType: ImportSourceType; label?: string; consent: boolean }): Promise<ImportSuggestion> {
+    // Consent gate documents the future rule: imports/extraction require explicit parent approval.
     if (!input.consent) {
       throw new Error('IMPORT_REQUIRES_PARENT_CONSENT');
     }
 
+    // Placeholder extraction returns a draft item so the client can exercise the review workflow.
     const label = input.label ?? input.sourceType;
     return {
       id: id('import'),
       sourceType: input.sourceType,
-      summary: `Import request received for ${label}. This backend does not create OCR/AI schedule drafts yet.`,
-      proposedScheduleItems: [],
+      summary: `Draft extraction ready for ${label}. Parent review is required before saving.`,
+      proposedScheduleItems: [
+        {
+          type: input.sourceType === 'decree' ? 'custody' : 'event',
+          title: input.sourceType === 'flyer' ? 'School flyer event' : 'Imported schedule item',
+          startsAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+          notificationOffsets: ['day_before', 'hour_before'],
+          source: input.sourceType,
+          confidence: 0.5,
+          notes: 'API placeholder: OCR/AI pipeline not wired yet.'
+        }
+      ],
       warnings: [
-        'No OCR/AI extraction is wired to this backend demo yet.',
-        'Use the mobile guided import flow with pasted text/calendar/text-like files for real demo behavior.',
-        'Review all dates, names, custody terms, and medication instructions before saving.'
+        'Review all dates, names, custody terms, and medication instructions before saving.',
+        'Sensitive identifiers should be redacted before AI extraction unless explicitly enabled.'
       ]
     };
   }
 }
 
 export function createBackendFromEnv(env = process.env): VaultBackend {
+  // Env switch lets deployment decide between cloud-like and self-hosted behavior.
   const mode = env.PARENTVAULT_BACKEND_MODE === 'self-hosted' ? 'self-hosted' : 'cloud';
   return new MemoryVaultBackend({
     mode,

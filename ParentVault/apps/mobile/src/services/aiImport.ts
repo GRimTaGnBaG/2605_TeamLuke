@@ -9,32 +9,40 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import type { ImportSourceType, ImportSuggestion, ScheduleType } from '@parentvault/shared';
 
+// Demo id helper for draft import suggestions.
 const id = () => Math.random().toString(36).slice(2, 10);
 
 interface ImportInput {
+  // Where the source material came from.
   sourceType: ImportSourceType;
+  // Human label shown in summaries/review cards.
   label: string;
+  // Optional pasted/extracted text; stronger drafts come from raw text.
   rawText?: string;
 }
 
+// Formats extracted names/titles for draft display.
 const titleCase = (value: string) => value.replace(/\w\S*/g, part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase());
 
+// Reads simple "Label: value" lines from pasted text.
 const lineValue = (text: string, labels: string[]) => {
   const escapedLabels = labels.map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const match = text.match(new RegExp(`(?:^|\\n)\\s*(?:${escapedLabels})\\s*[:=-]\\s*(.+)`, 'i'));
   return match?.[1]?.trim();
 };
 
+// Lightweight extractors used by the stub before real OCR/AI exists.
 const firstPhone = (text: string) => text.match(/(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/)?.[0];
 const firstUrl = (text: string) => text.match(/https?:\/\/[^\s)]+|www\.[^\s)]+/i)?.[0];
 
 const inferScheduleType = (sourceType: ImportSourceType, text: string): ScheduleType => {
+  // Use source type first, then keywords, to draft the most likely schedule category.
   const lower = text.toLowerCase();
   if (sourceType === 'decree' || lower.includes('custody') || lower.includes('exchange') || lower.includes('pickup') || lower.includes('dropoff')) return 'custody';
   if (lower.includes('medicine') || lower.includes('medication') || lower.includes('dose') || lower.includes('rx')) return 'medication';
@@ -44,6 +52,7 @@ const inferScheduleType = (sourceType: ImportSourceType, text: string): Schedule
 };
 
 const parseScheduleDate = (text: string) => {
+  // Prefer ISO-like dates when present.
   const explicitIso = text.match(/\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\b/);
   if (explicitIso) {
     const normalized = explicitIso[0].includes(':') ? explicitIso[0].replace(' ', 'T') : `${explicitIso[0]}T09:00`;
@@ -51,6 +60,7 @@ const parseScheduleDate = (text: string) => {
     if (!Number.isNaN(date.getTime())) return date.toISOString();
   }
 
+  // Fall back to common "Month day" formats.
   const monthDate = text.match(/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:,\s*\d{4})?(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?/i);
   if (monthDate) {
     const hasYear = /\d{4}/.test(monthDate[0]);
@@ -59,14 +69,17 @@ const parseScheduleDate = (text: string) => {
     if (!Number.isNaN(date.getTime())) return date.toISOString();
   }
 
+  // If no date is found, create a near-future review placeholder.
   return new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 };
 
 export async function createImportSuggestion(inputOrSourceType: ImportInput | ImportSourceType, labelMaybe?: string): Promise<ImportSuggestion> {
+  // Support both old call style (sourceType, label) and richer input object.
   const input: ImportInput = typeof inputOrSourceType === 'string'
     ? { sourceType: inputOrSourceType, label: labelMaybe || 'uploaded source' }
     : inputOrSourceType;
 
+  // Extract the best available draft values from pasted/source text.
   const rawText = input.rawText?.trim() || '';
   const lower = rawText.toLowerCase();
   const sourceType = input.sourceType;
@@ -79,6 +92,7 @@ export async function createImportSuggestion(inputOrSourceType: ImportInput | Im
   const address = lineValue(rawText, ['address', 'location']);
   const startsAt = parseScheduleDate(rawText);
 
+  // Profile proposal is included only when the text suggests child or school details.
   const proposedProfiles = schoolName || childName ? [{
     displayName: childName,
     school: schoolName ? {
@@ -92,6 +106,7 @@ export async function createImportSuggestion(inputOrSourceType: ImportInput | Im
     } : undefined
   }] : undefined;
 
+  // Nothing is saved here. The caller must show these draft proposals for parent review.
   return {
     id: id(),
     sourceType,
@@ -110,7 +125,7 @@ export async function createImportSuggestion(inputOrSourceType: ImportInput | Im
         confidence: rawText ? 0.68 : 0.35,
         notes: rawText
           ? `Extracted from uploaded/pasted information. Original text:\n${rawText.slice(0, 1200)}`
-          : 'Placeholder extraction. Paste document text for better results. Parent review required before saving.'
+          : 'Paste document text for a stronger draft. Parent review is required before saving.'
       }
     ],
     proposedJournalEntries: rawText ? [
@@ -126,8 +141,8 @@ export async function createImportSuggestion(inputOrSourceType: ImportInput | Im
     ] : undefined,
     warnings: [
       'Review all dates, times, names, locations, medication details, and school details before saving.',
-      'Uploaded/pasted information stays on this device right now; encrypted storage and account sync must be completed before real sensitive use.',
-      ...(rawText ? [] : ['File text extraction is limited in this MVP. If the preview looks generic, paste the document text into the text box.'])
+      'Keep source documents available so saved details can be checked later.',
+      ...(rawText ? [] : ['If the preview looks generic, paste the document text into the text box.'])
     ]
   };
 }

@@ -9,17 +9,18 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import * as ImagePicker from 'expo-image-picker';
 import { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import type { JournalEntryType } from '@parentvault/shared';
 import { Card } from '../components/Card';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { buildJournalExportManifest, makeDefaultJournalExportRequest } from '../services/journalExport';
+import { ThemedTextInput } from '../components/ThemedTextInput';
+import { buildJournalExportManifest, buildJournalExportText, makeDefaultJournalExportRequest } from '../services/journalExport';
 import { useVaultStore } from '../store/vaultStore';
 import { useTheme } from '../theme';
 
@@ -43,7 +44,7 @@ const buildNeutralityChecklist = (input: { note: string; title: string; people: 
     'Keep opinions separate from facts, and quote exact messages when you have them.'
   ];
 
-  return `Neutrality checklist:\n• ${suggestions.join('\n• ')}`;
+  return `Neutrality checklist:\n- ${suggestions.join('\n- ')}`;
 };
 
 export function JournalScreen() {
@@ -143,10 +144,16 @@ export function JournalScreen() {
   };
 
   // Builds a safe preview of what a future export package would contain.
-  const previewExport = () => {
+  const previewExport = async () => {
     const request = makeDefaultJournalExportRequest(children[0]?.id);
     const manifest = buildJournalExportManifest(journal, request);
-    setExportText(`Export preview: ${manifest.entryCount} entries, ${manifest.attachmentCount} attachments. Format: ${manifest.format.toUpperCase()}. Includes event date, input timestamp, audit metadata, and attachment IDs.`);
+    const exportBody = buildJournalExportText(journal, request);
+    setExportText(`Export ready: ${manifest.entryCount} entries, ${manifest.attachmentCount} attachments. Includes event date, input timestamp, audit metadata, and attachment IDs.`);
+    if (!manifest.entryCount) {
+      setFormStatus('Add at least one journal entry before sharing an export.');
+      return;
+    }
+    await Share.share({ title: 'ParentVault Journal Export', message: exportBody });
   };
 
   // Checks the draft for missing evidence basics and loaded wording before saving.
@@ -166,11 +173,11 @@ export function JournalScreen() {
         </View>
         <Text style={styles.label}>Event date/time</Text>
         <Text style={styles.help}>Use when the event actually happened. The app also stores when you entered it.</Text>
-        <TextInput value={occurredAt} onChangeText={setOccurredAt} placeholder="YYYY-MM-DDTHH:mm" style={styles.smallInput} />
-        <TextInput value={title} onChangeText={setTitle} placeholder="Title" style={styles.smallInput} />
-        <TextInput value={people} onChangeText={setPeople} placeholder="People involved, comma-separated" style={styles.smallInput} />
-        <TextInput value={location} onChangeText={setLocation} placeholder="Location" style={styles.smallInput} />
-        <TextInput value={note} onChangeText={setNote} placeholder="What happened? Add context, exact words, symptoms, medication details, or why this matters." style={styles.input} multiline />
+        <ThemedTextInput value={occurredAt} onChangeText={setOccurredAt} placeholder="YYYY-MM-DDTHH:mm" style={styles.smallInput} />
+        <ThemedTextInput value={title} onChangeText={setTitle} placeholder="Title" style={styles.smallInput} />
+        <ThemedTextInput value={people} onChangeText={setPeople} placeholder="People involved, comma-separated" style={styles.smallInput} />
+        <ThemedTextInput value={location} onChangeText={setLocation} placeholder="Location" style={styles.smallInput} />
+        <ThemedTextInput value={note} onChangeText={setNote} placeholder="What happened? Add context, exact words, symptoms, medication details, or why this matters." style={styles.input} multiline />
         <PrimaryButton tone="quiet" onPress={reviewNeutrality}>Check neutral wording</PrimaryButton>
         <PrimaryButton onPress={() => addNote(false)}>Save journal entry</PrimaryButton>
         <PrimaryButton tone="quiet" onPress={() => addNote(true, false)}>Attach photo/screenshot</PrimaryButton>
@@ -179,8 +186,8 @@ export function JournalScreen() {
       </Card>
       <Card>
         <Text style={styles.label}>Export journal</Text>
-        <Text style={styles.help}>Production export should create a ZIP/PDF package with entries in event-date order, photos/screenshots/documents, metadata, hashes, and an export manifest.</Text>
-        <PrimaryButton onPress={previewExport}>Preview export package</PrimaryButton>
+        <Text style={styles.help}>Create a shareable journal package with event dates, entry timestamps, audit details, attachment IDs, and review reminders.</Text>
+        <PrimaryButton onPress={() => void previewExport()}>Share export package</PrimaryButton>
         {exportText ? <Text style={styles.attachment}>{exportText}</Text> : null}
       </Card>
       {sortedJournal.map(entry => (
@@ -201,13 +208,13 @@ export function JournalScreen() {
 
 // Screen-specific styles for the Journal tab only.
 const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
-  container: { padding: 18, paddingBottom: 34 },
-  title: { fontSize: 34, fontWeight: '900', color: theme.text, letterSpacing: -0.8, marginTop: 4 },
-  subtitle: { color: theme.muted, marginTop: 6, marginBottom: 18, lineHeight: 21 },
+  container: { padding: 20, paddingBottom: 32 },
+  title: { fontSize: 30, fontWeight: '800', color: theme.text },
+  subtitle: { color: theme.muted, marginBottom: 16 },
   label: { fontWeight: '800', color: theme.text, marginTop: 8 },
   help: { color: theme.subtle, marginBottom: 6 },
-  input: { minHeight: 120, borderRadius: 14, borderWidth: 1, borderColor: theme.inputBorder, padding: 12, backgroundColor: theme.input, marginTop: 8 },
-  smallInput: { minHeight: 48, borderRadius: 16, borderWidth: 1, borderColor: theme.inputBorder, padding: 12, backgroundColor: theme.input, marginTop: 8, color: theme.text },
+  input: { minHeight: 120, textAlignVertical: 'top' },
+  smallInput: { minHeight: 44 },
   typeGrid: { gap: 4 },
   entryType: { color: theme.primary, fontWeight: '900', fontSize: 12 },
   entryTitle: { fontSize: 18, fontWeight: '800' },
@@ -215,4 +222,3 @@ const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
   attachment: { marginTop: 8, color: theme.primary, fontWeight: '700' },
   formStatus: { marginTop: 8, color: theme.primary, fontWeight: '700' }
 });
-

@@ -9,7 +9,7 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
@@ -32,14 +32,17 @@ import {
 } from './validation.js';
 
 interface IdParams {
+  // Route parameter used by profile, schedule, and journal item endpoints.
   id: string;
 }
 
+// Shared 404 response keeps missing-resource errors consistent and avoids leaking internals.
 function sendNotFound(reply: FastifyReply, resource: string) {
   return reply.code(404).send({ error: 'not_found', message: `${resource} was not found` });
 }
 
 export async function registerRoutes(app: FastifyInstance, backend: VaultBackend) {
+  // Central error handler turns validation and consent errors into safe public responses.
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError) {
       return reply.code(400).send({
@@ -56,6 +59,7 @@ export async function registerRoutes(app: FastifyInstance, backend: VaultBackend
     return reply.code(500).send({ error: 'internal_error' });
   });
 
+  // Health endpoint is safe to expose because it reports service state, not user data.
   app.get('/health', async () => ({
     ok: true,
     service: 'parentvault-api',
@@ -63,8 +67,10 @@ export async function registerRoutes(app: FastifyInstance, backend: VaultBackend
     time: new Date().toISOString()
   }));
 
+  // Backend endpoint helps debug whether the API is running cloud or self-hosted mode.
   app.get('/backend', async () => backend.info());
 
+  // Security/auth scaffold endpoints. They are demo-only until a real auth provider is wired.
   app.get('/auth/security-settings', async () => defaultAuthSecuritySettings('demo-account'));
   app.post('/auth/2fa/challenge', async (request, reply) => {
     const input = parseBody(createTwoFactorChallengeSchema, request.body);
@@ -77,6 +83,7 @@ export async function registerRoutes(app: FastifyInstance, backend: VaultBackend
     return verified ? verified : reply.code(400).send({ error: 'invalid_or_expired_2fa_code' });
   });
 
+  // Child profile CRUD.
   app.get('/profiles', async () => backend.listProfiles());
   app.post('/profiles', async (request, reply) => {
     const profile = await backend.createProfile(parseBody(createProfileSchema, request.body) as Omit<ChildProfile, 'id' | 'updatedAt'>);
@@ -95,6 +102,7 @@ export async function registerRoutes(app: FastifyInstance, backend: VaultBackend
     return deleted ? reply.code(204).send() : sendNotFound(reply, 'profile');
   });
 
+  // Schedule/calendar CRUD plus medication taken action.
   app.get('/schedule', async () => backend.listSchedule());
   app.post('/schedule', async (request, reply) => {
     const item = await backend.createScheduleItem(parseBody(createScheduleItemSchema, request.body) as Omit<ScheduleItem, 'id'>);
@@ -117,6 +125,7 @@ export async function registerRoutes(app: FastifyInstance, backend: VaultBackend
     return deleted ? reply.code(204).send() : sendNotFound(reply, 'schedule item');
   });
 
+  // Journal CRUD for parent notes, attachments, and future export workflows.
   app.get('/journal', async () => backend.listJournal());
   app.post('/journal', async (request, reply) => {
     const entry = await backend.createJournalEntry(parseBody(createJournalEntrySchema, request.body) as Omit<JournalEntry, 'id'>);
@@ -135,6 +144,7 @@ export async function registerRoutes(app: FastifyInstance, backend: VaultBackend
     return deleted ? reply.code(204).send() : sendNotFound(reply, 'journal entry');
   });
 
+  // Import endpoint creates a review-first suggestion. It never saves extracted data directly.
   app.post('/imports', async (request, reply) => {
     const input = parseBody(createImportSchema, request.body);
     const suggestion = await backend.createImportSuggestion(input);

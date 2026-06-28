@@ -68,11 +68,13 @@ For a text version of the full presentation narrative, see `docs/PRODUCT_PRESENT
 
 ## Product/business docs
 
+- `CHANGELOG.md` — readable version history for demos, rollback points, and portfolio review.
+- `docs/VERSION_CONTROL.md` — GitHub workflow, branch strategy, rollback strategy, and portfolio checklist.
 - `docs/BEGINNER_START_HERE.md` — beginner-friendly guide for running, reading, and safely editing ParentVault.
 - `docs/DEVELOPER_WORKFLOW.md` — safe development workflow, checks, comments, commits, and platform rules.
 - `docs/TROUBLESHOOTING.md` — common errors and step-by-step fixes.
 - `docs/CODE_ORGANIZATION.md` — map of app tabs, screen files, helpers, and split-file standards.
-- `docs/PRODUCT_PRESENTATION.md` — full app/page presentation notes covering each tab, product flow, data model, AI boundaries, security/privacy, build status, and next build priorities.
+- `docs/PRODUCT_PRESENTATION.md` — full app/page presentation notes covering each tab, product flow, data model, AI boundaries, security/privacy, prototype status, and next build priorities.
 - `docs/PRODUCT_OVERVIEW.md` — product pillars and docs map.
 - `docs/MVP_SCOPE.md` — launchable MVP scope and explicit exclusions.
 - `docs/ROADMAP.md` — cloud-first path through public launch and later self-host.

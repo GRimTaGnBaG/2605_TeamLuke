@@ -9,23 +9,26 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import { z } from 'zod';
 
+// Enum schemas mirror shared domain union types and reject unsupported category strings at the API boundary.
 export const importSourceTypeSchema = z.enum(['image', 'pdf', 'calendar', 'decree', 'flyer', 'screenshot', 'voice', 'text']);
 export const scheduleTypeSchema = z.enum(['custody', 'school', 'event', 'medication', 'appointment']);
 export const providerTypeSchema = z.enum(['pediatrician', 'doctor', 'dentist', 'specialist', 'therapist', 'pharmacy', 'school', 'childcare', 'insurance', 'legal', 'other']);
 export const schoolDateTypeSchema = z.enum(['first_day', 'last_day', 'holiday', 'break', 'teacher_workday', 'early_release', 'no_school', 'exam', 'registration', 'other']);
 export const secondFactorMethodSchema = z.enum(['totp', 'sms', 'email', 'passkey', 'recovery_code']);
 
+// Notification offsets accept known presets or a bounded custom minute offset.
 export const notificationOffsetSchema = z.union([
   z.enum(['day_before', 'day_of', 'hour_before']),
   z.object({ customMinutesBefore: z.number().int().positive().max(60 * 24 * 30) })
 ]);
 
+// Encrypted fields must include enough metadata to decrypt/audit them later.
 export const encryptedValueSchema = z.object({
   ciphertext: z.string().min(1),
   algorithm: z.enum(['xchacha20-poly1305', 'aes-256-gcm']),
@@ -35,6 +38,7 @@ export const encryptedValueSchema = z.object({
   createdAt: z.string().datetime()
 });
 
+// Shared postal address validation used by schools, providers, and contacts.
 export const addressSchema = z.object({
   line1: z.string().min(1),
   line2: z.string().optional(),
@@ -44,6 +48,7 @@ export const addressSchema = z.object({
   country: z.string().optional()
 });
 
+// Provider validation covers doctors, pharmacies, therapists, schools, legal contacts, and other care resources.
 export const careProviderSchema = z.object({
   id: z.string().optional(),
   type: providerTypeSchema,
@@ -63,6 +68,7 @@ export const careProviderSchema = z.object({
   updatedAt: z.string().datetime().optional()
 });
 
+// Emergency contacts are lighter than care providers but still need a name/relationship baseline.
 export const emergencyContactSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -74,6 +80,7 @@ export const emergencyContactSchema = z.object({
   notes: z.string().optional()
 });
 
+// Medication schema supports dose/refill/provider metadata and encrypted Rx identifiers.
 export const medicationSchema = z.object({
   id: z.string().optional(),
   name: z.string().min(1),
@@ -94,6 +101,7 @@ export const medicationSchema = z.object({
   sideEffectsToWatch: z.array(z.string()).optional()
 });
 
+// Medical profile defaults arrays to empty so callers do not have to send every optional collection.
 export const medicalProfileSchema = z.object({
   bloodType: z.string().optional(),
   allergies: z.array(z.string()).default([]),
@@ -105,6 +113,7 @@ export const medicalProfileSchema = z.object({
   careInstructions: z.string().optional()
 });
 
+// Insurance schema keeps sensitive member/group/Rx fields encrypted while allowing normal contact metadata.
 export const insuranceSchema = z.object({
   id: z.string().optional(),
   providerName: z.string().min(1),
@@ -127,6 +136,7 @@ export const insuranceSchema = z.object({
   notes: z.string().optional()
 });
 
+// School calendar dates are converted to stable ids when clients omit ids.
 export const schoolCalendarDateSchema = z.object({
   id: z.string().optional(),
   type: schoolDateTypeSchema,
@@ -139,6 +149,7 @@ export const schoolCalendarDateSchema = z.object({
   notes: z.string().optional()
 }).transform((date, index) => ({ ...date, id: date.id ?? `school_date_${index}` }));
 
+// School schema supports school lookup/enrichment plus parent-reviewed pickup/calendar details.
 export const schoolSchema = z.object({
   id: z.string().optional(),
   schoolName: z.string().min(1),
@@ -160,6 +171,7 @@ export const schoolSchema = z.object({
   notes: z.string().optional()
 });
 
+// Legal/custody schema allows plaintext summaries but keeps case numbers encrypted.
 export const legalCustodySchema = z.object({
   id: z.string().optional(),
   court: z.string().optional(),
@@ -172,14 +184,8 @@ export const legalCustodySchema = z.object({
   notes: z.string().optional()
 });
 
-export const customChildInfoSchema = z.object({
-  id: z.string().optional(),
-  title: z.string().min(1),
-  value: z.string().min(1),
-  createdAt: z.string().datetime().optional(),
-  updatedAt: z.string().datetime().optional()
-});
-
+// Create-profile schema defines what clients may send when creating a child record.
+// Transforms fill local ids for nested records when the client does not provide them.
 export const createProfileSchema = z.object({
   displayName: z.string().min(1),
   legalName: z.string().optional(),
@@ -193,15 +199,13 @@ export const createProfileSchema = z.object({
   insurance: z.array(insuranceSchema.transform((policy, index) => ({ ...policy, id: policy.id ?? `insurance_${index}` }))).default([]),
   school: schoolSchema.transform(school => ({ ...school, id: school.id ?? 'school_primary' })).optional(),
   legalCustody: legalCustodySchema.transform(legal => ({ ...legal, id: legal.id ?? 'legal_primary' })).optional(),
-  customInfo: z.array(customChildInfoSchema.transform((item, index) => {
-    const savedAt = new Date().toISOString();
-    return { ...item, id: item.id ?? `custom_${index}`, createdAt: item.createdAt ?? savedAt, updatedAt: item.updatedAt ?? savedAt };
-  })).default([]),
   notes: z.string().optional()
 });
 
+// Profile patches reuse the create schema but make every field optional.
 export const updateProfileSchema = createProfileSchema.partial();
 
+// Schedule item validation is shared by create and patch endpoints.
 export const createScheduleItemSchema = z.object({
   childId: z.string().optional(),
   type: scheduleTypeSchema,
@@ -209,8 +213,6 @@ export const createScheduleItemSchema = z.object({
   startsAt: z.string().datetime(),
   endsAt: z.string().datetime().optional(),
   location: z.string().optional(),
-  custodyHolder: z.string().optional(),
-  bringList: z.array(z.string()).default([]),
   providerId: z.string().optional(),
   notes: z.string().optional(),
   medicationId: z.string().optional(),
@@ -222,9 +224,11 @@ export const createScheduleItemSchema = z.object({
 
 export const updateScheduleItemSchema = createScheduleItemSchema.partial();
 
+// Journal taxonomy and attachment provenance validation.
 export const journalEntryTypeSchema = z.enum(['general', 'medical', 'custody', 'school', 'communication', 'behavior', 'expense', 'appointment', 'medication', 'other']);
 export const attachmentCaptureMethodSchema = z.enum(['camera', 'photo_library', 'screenshot_import', 'document_picker', 'share_sheet', 'manual']);
 
+// Attachment schema records file provenance and optional hashing/redaction metadata.
 export const journalAttachmentSchema = z.object({
   id: z.string().optional(),
   kind: z.enum(['photo', 'screenshot', 'document']),
@@ -240,6 +244,7 @@ export const journalAttachmentSchema = z.object({
   notes: z.string().optional()
 }).transform((attachment, index) => ({ ...attachment, id: attachment.id ?? `attachment_${index}` }));
 
+// Audit metadata defaults are filled server-side when omitted.
 export const journalAuditSchema = z.object({
   createdAt: z.string().datetime().default(() => new Date().toISOString()),
   updatedAt: z.string().datetime().default(() => new Date().toISOString()),
@@ -251,6 +256,7 @@ export const journalAuditSchema = z.object({
   source: z.enum(['manual', 'ai_import', 'share_sheet', 'camera', 'document_import']).default('manual')
 });
 
+// Journal create schema ensures every entry has timing, title, notes, attachments array, tags array, and audit metadata.
 export const createJournalEntrySchema = z.object({
   childId: z.string().optional(),
   type: journalEntryTypeSchema.default('general'),
@@ -268,6 +274,7 @@ export const createJournalEntrySchema = z.object({
 
 export const updateJournalEntrySchema = createJournalEntrySchema.partial();
 
+// Imports require explicit consent and identify whether to retain the original source.
 export const createImportSchema = z.object({
   sourceType: importSourceTypeSchema,
   label: z.string().optional(),
@@ -275,6 +282,7 @@ export const createImportSchema = z.object({
   retainSource: z.boolean().default(false)
 });
 
+// Two-factor request/verification payloads for the demo auth scaffold.
 export const createTwoFactorChallengeSchema = z.object({
   method: secondFactorMethodSchema.default('totp')
 });
@@ -285,5 +293,6 @@ export const verifyTwoFactorChallengeSchema = z.object({
 });
 
 export function parseBody<T>(schema: z.ZodType<T>, body: unknown): T {
+  // parse throws a ZodError; routes.ts converts that into a structured 400 response.
   return schema.parse(body);
 }

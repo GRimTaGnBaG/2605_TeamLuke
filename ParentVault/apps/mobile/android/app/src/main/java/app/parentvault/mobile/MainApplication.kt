@@ -27,9 +27,11 @@ class MainApplication : Application(), ReactApplication {
               // add(MyReactNativePackage())
             }
 
-          override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
+          override fun getJSMainModuleName(): String = "apps/mobile/index"
 
           override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
+
+          override val isHermesEnabled: Boolean = true
 
           override val isNewArchEnabled: Boolean = BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
       }

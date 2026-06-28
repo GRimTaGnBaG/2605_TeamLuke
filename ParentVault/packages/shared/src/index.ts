@@ -9,28 +9,42 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
+// Base identifier type used across the shared schema.
 export type ID = string;
 
+// Schedule categories drive colors, reminders, import classification, and UI grouping.
 export type ScheduleType = 'custody' | 'school' | 'event' | 'medication' | 'appointment';
+// Import sources identify where a proposed record came from before the parent reviews it.
 export type ImportSourceType = 'image' | 'pdf' | 'calendar' | 'decree' | 'flyer' | 'screenshot' | 'voice' | 'text';
+// Reminder offsets can be standard named timing rules or an exact custom number of minutes.
 export type NotificationOffset = 'day_before' | 'day_of' | 'hour_before' | { customMinutesBefore: number };
+// Provider/contact categories keep care, school, pharmacy, legal, and insurance records searchable.
 export type ProviderType = 'pediatrician' | 'doctor' | 'dentist' | 'specialist' | 'therapist' | 'pharmacy' | 'school' | 'childcare' | 'insurance' | 'legal' | 'other';
+// School calendar date types separate holidays, no-school days, early releases, and other school events.
 export type SchoolDateType = 'first_day' | 'last_day' | 'holiday' | 'break' | 'teacher_workday' | 'early_release' | 'no_school' | 'exam' | 'registration' | 'other';
+// Account security option types used by the settings/security model.
 export type SecondFactorMethod = 'totp' | 'sms' | 'email' | 'passkey' | 'recovery_code';
 export type LocalUnlockMethod = 'biometric' | 'device_passcode' | 'app_pin';
+// Feature flags let ParentVault run in minimal schedule-only mode or full vault mode.
 export type ParentVaultFeature = 'schedule_reminders' | 'child_profile' | 'medical' | 'providers' | 'insurance' | 'school' | 'custody_legal' | 'journal' | 'media_attachments' | 'ai_imports' | 'web_enrichment';
+// Journal taxonomy supports filtering and export for medical, custody, school, and general notes.
 export type JournalEntryType = 'general' | 'medical' | 'custody' | 'school' | 'communication' | 'behavior' | 'expense' | 'appointment' | 'medication' | 'other';
+// Attachment capture method records how a journal/import file entered the vault.
 export type AttachmentCaptureMethod = 'camera' | 'photo_library' | 'screenshot_import' | 'document_picker' | 'share_sheet' | 'manual';
+// Export formats are the planned output package types for journal/evidence sharing.
 export type ExportFormat = 'pdf' | 'zip' | 'json' | 'csv';
+// Reminder kinds describe why a reminder exists, not just when it fires.
 export type ReminderKind = 'day_before' | 'morning_of' | 'hour_before' | 'pickup_school_day' | 'pickup_no_school_day' | 'therapy_transport' | 'therapy_hour_before' | 'medication_due' | 'journal_prompt' | 'monthly_calendar_setup' | 'custom';
 export type ReminderDeliveryChannel = 'local_push' | 'email' | 'sms' | 'in_app';
 
+// Encryption scopes describe which category of sensitive data an encrypted value belongs to.
 export type EncryptionScope = 'identity' | 'medical' | 'insurance' | 'legal' | 'journal' | 'media' | 'import' | 'general';
 
+// Metadata wrapper for encrypted fields that must not be stored as plaintext.
 export interface EncryptedValue {
   ciphertext: string;
   algorithm: 'xchacha20-poly1305' | 'aes-256-gcm';
@@ -40,11 +54,13 @@ export interface EncryptedValue {
   createdAt: string;
 }
 
+// Marker for values that may exist only temporarily in memory while being entered or encrypted.
 export interface SensitivePlaintext<T = string> {
   value: T;
   warning: 'plaintext_runtime_only_never_persist';
 }
 
+// User-controlled privacy mode and feature-consent settings.
 export interface PrivacyFeatureSettings {
   accountId: ID;
   enabledFeatures: ParentVaultFeature[];
@@ -56,6 +72,7 @@ export interface PrivacyFeatureSettings {
   updatedAt: string;
 }
 
+// Account/device security settings for unlock and second-factor requirements.
 export interface AuthSecuritySettings {
   accountId: ID;
   twoFactorRequired: boolean;
@@ -68,6 +85,7 @@ export interface AuthSecuritySettings {
   lastSecurityReviewAt?: string;
 }
 
+// Runtime challenge model for a second-factor verification attempt.
 export interface TwoFactorChallenge {
   id: ID;
   method: SecondFactorMethod;
@@ -76,6 +94,7 @@ export interface TwoFactorChallenge {
   verifiedAt?: string;
 }
 
+// Postal address shared by providers, schools, contacts, and other entities.
 export interface Address {
   line1: string;
   line2?: string;
@@ -85,6 +104,7 @@ export interface Address {
   country?: string;
 }
 
+// Doctor, dentist, therapist, pharmacy, school, legal, or other provider contact.
 export interface CareProvider {
   id: ID;
   type: ProviderType;
@@ -104,6 +124,7 @@ export interface CareProvider {
   updatedAt: string;
 }
 
+// Insurance plan/card metadata. Sensitive member/group fields are encrypted-value fields.
 export interface InsuranceInfo {
   id: ID;
   providerName: string;
@@ -126,6 +147,7 @@ export interface InsuranceInfo {
   notes?: string;
 }
 
+// Reusable notification rule that produces planned reminders.
 export interface ReminderRule {
   id: ID;
   kind: ReminderKind;
@@ -136,6 +158,7 @@ export interface ReminderRule {
   deliveryChannels: ReminderDeliveryChannel[];
 }
 
+// Notification preference bundle for default, pickup, therapy, journal, and monthly planning reminders.
 export interface NotificationPreferences {
   accountId: ID;
   timezone: string;
@@ -164,6 +187,7 @@ export interface NotificationPreferences {
   };
 }
 
+// Concrete reminder generated from a schedule item or standing reminder rule.
 export interface PlannedReminder {
   id: ID;
   scheduleItemId?: ID;
@@ -175,6 +199,7 @@ export interface PlannedReminder {
   timezone: string;
 }
 
+// Individual date from a school calendar such as no-school days, breaks, or early releases.
 export interface SchoolCalendarDate {
   id: ID;
   type: SchoolDateType;
@@ -187,6 +212,7 @@ export interface SchoolCalendarDate {
   notes?: string;
 }
 
+// School profile details used for pickups, attendance, calendar enrichment, and school contacts.
 export interface SchoolInfo {
   id: ID;
   schoolName: string;
@@ -208,6 +234,7 @@ export interface SchoolInfo {
   notes?: string;
 }
 
+// Review-first school enrichment result. Parent confirmation is required before saving.
 export interface SchoolEnrichmentSuggestion {
   id: ID;
   query: string;
@@ -219,6 +246,7 @@ export interface SchoolEnrichmentSuggestion {
   requiresParentConfirmation: true;
 }
 
+// Custody/legal summary. Case numbers remain encrypted when implemented.
 export interface LegalCustodyInfo {
   id: ID;
   court?: string;
@@ -231,6 +259,7 @@ export interface LegalCustodyInfo {
   notes?: string;
 }
 
+// Emergency or pickup-authorized contact tied to a child profile.
 export interface EmergencyContact {
   id: ID;
   name: string;
@@ -242,6 +271,7 @@ export interface EmergencyContact {
   notes?: string;
 }
 
+// Medication record used for child medical profile, refills, providers, and reminders.
 export interface Medication {
   id: ID;
   name: string;
@@ -262,6 +292,7 @@ export interface Medication {
   sideEffectsToWatch?: string[];
 }
 
+// Medical summary for allergies, medications, restrictions, conditions, and care notes.
 export interface MedicalProfile {
   bloodType?: string;
   allergies: string[];
@@ -273,14 +304,7 @@ export interface MedicalProfile {
   careInstructions?: string;
 }
 
-export interface CustomChildInfo {
-  id: ID;
-  title: string;
-  value: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
+// Main child vault profile. Most app features attach to or derive from this record.
 export interface ChildProfile {
   id: ID;
   displayName: string;
@@ -295,11 +319,11 @@ export interface ChildProfile {
   insurance: InsuranceInfo[];
   school?: SchoolInfo;
   legalCustody?: LegalCustodyInfo;
-  customInfo?: CustomChildInfo[];
   notes?: string;
   updatedAt: string;
 }
 
+// Calendar/schedule item for custody, school, events, medication, and appointments.
 export interface ScheduleItem {
   id: ID;
   childId?: ID;
@@ -308,10 +332,6 @@ export interface ScheduleItem {
   startsAt: string;
   endsAt?: string;
   location?: string;
-  /** Who has physical care/parenting time for this event, when relevant. */
-  custodyHolder?: string;
-  /** Practical packing/prep checklist for the event: backpack, meds, paperwork, uniform, etc. */
-  bringList?: string[];
   providerId?: ID;
   notes?: string;
   medicationId?: ID;
@@ -321,6 +341,7 @@ export interface ScheduleItem {
   confidence?: number;
 }
 
+// File/media attachment tied to a journal entry, including provenance metadata.
 export interface JournalAttachment {
   id: ID;
   kind: 'photo' | 'screenshot' | 'document';
@@ -336,6 +357,7 @@ export interface JournalAttachment {
   notes?: string;
 }
 
+// Audit metadata that helps preserve journal chronology and evidence handling context.
 export interface JournalEntryAuditMetadata {
   createdAt: string;
   updatedAt: string;
@@ -347,6 +369,7 @@ export interface JournalEntryAuditMetadata {
   source: 'manual' | 'ai_import' | 'share_sheet' | 'camera' | 'document_import';
 }
 
+// Parent-entered or imported journal note for medical, custody, school, communication, and other events.
 export interface JournalEntry {
   id: ID;
   childId?: ID;
@@ -363,6 +386,7 @@ export interface JournalEntry {
   audit: JournalEntryAuditMetadata;
 }
 
+// User-selected export options for a future PDF/ZIP/JSON/CSV package.
 export interface JournalExportRequest {
   id: ID;
   childId?: ID;
@@ -377,6 +401,7 @@ export interface JournalExportRequest {
   createdAt: string;
 }
 
+// Summary manifest describing what an export package contains.
 export interface JournalExportManifest {
   id: ID;
   generatedAt: string;
@@ -387,6 +412,7 @@ export interface JournalExportManifest {
   warnings: string[];
 }
 
+// Searchable/citable text unit used by grounded vault Q&A.
 export interface KnowledgeSource {
   id: ID;
   childId?: ID;
@@ -398,6 +424,7 @@ export interface KnowledgeSource {
   uri?: string;
 }
 
+// Grounded answer from saved vault sources with confidence, citations, and warnings.
 export interface RagAnswer {
   answer: string;
   confidence: 'high' | 'medium' | 'low' | 'unknown';
@@ -405,6 +432,7 @@ export interface RagAnswer {
   warnings: string[];
 }
 
+// Draft extraction result from pasted text, documents, screenshots, or future OCR/import flows.
 export interface ImportSuggestion {
   id: ID;
   sourceType: ImportSourceType;
@@ -415,6 +443,7 @@ export interface ImportSuggestion {
   warnings: string[];
 }
 
+// Chat command result shape for replies plus optional proposed vault changes.
 export interface ChatCommandResult {
   reply: string;
   proposedScheduleItems?: Partial<ScheduleItem>[];
@@ -422,6 +451,7 @@ export interface ChatCommandResult {
   ragAnswer?: RagAnswer;
 }
 
+// Creates a valid empty medical profile so forms can initialize without null checks.
 export const emptyMedicalProfile = (): MedicalProfile => ({
   allergies: [],
   conditions: [],

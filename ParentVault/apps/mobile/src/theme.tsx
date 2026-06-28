@@ -9,7 +9,7 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
@@ -17,53 +17,57 @@ import { createContext, PropsWithChildren, useContext } from 'react';
 
 export type ThemeMode = 'dark' | 'light';
 
+// Palette contains every app-level color token for each theme mode.
 export const palette = {
   dark: {
     mode: 'dark' as const,
-    app: '#07111f',
-    surface: '#0d1b2f',
-    elevated: '#13223a',
-    card: '#101f35',
-    border: '#263955',
+    app: '#020617',
+    surface: '#0f172a',
+    elevated: '#111827',
+    card: '#111827',
+    border: '#1e293b',
     text: '#f8fafc',
     muted: '#cbd5e1',
     subtle: '#94a3b8',
-    warning: '#fbbf24',
-    primary: '#8ab4ff',
-    primaryStrong: '#3b82f6',
-    primarySoft: '#193b68',
-    input: '#091426',
-    inputBorder: '#3a506f',
+    warning: '#fdba74',
+    primary: '#60a5fa',
+    primaryStrong: '#2563eb',
+    primarySoft: '#1e3a8a',
+    input: '#020617',
+    inputBorder: '#334155',
     shadow: '#000000'
   },
   light: {
     mode: 'light' as const,
-    app: '#f3f6fb',
+    app: '#f8fafc',
     surface: '#ffffff',
-    elevated: '#e5e7eb',
+    elevated: '#ffffff',
     card: '#ffffff',
-    border: '#9ca3af',
-    text: '#020617',
-    muted: '#111827',
-    subtle: '#374151',
-    warning: '#7c2d12',
+    border: '#e2e8f0',
+    text: '#0f172a',
+    muted: '#475569',
+    subtle: '#64748b',
+    warning: '#9a3412',
     primary: '#1d4ed8',
-    primaryStrong: '#1e3a8a',
+    primaryStrong: '#1d4ed8',
     primarySoft: '#dbeafe',
     input: '#ffffff',
-    inputBorder: '#6b7280',
-    shadow: '#111827'
+    inputBorder: '#cbd5e1',
+    shadow: '#0f172a'
   }
 };
 
 export type Theme = (typeof palette)[ThemeMode];
 
+// Default to dark theme so consumers still have a value outside the provider in tests.
 const ThemeContext = createContext<Theme>(palette.dark);
 
 export function ThemeProvider({ mode, children }: PropsWithChildren<{ mode: ThemeMode }>) {
+  // Provide the selected palette to all descendants.
   return <ThemeContext.Provider value={palette[mode]}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {
+  // Convenience hook so components do not import/use ThemeContext directly.
   return useContext(ThemeContext);
 }

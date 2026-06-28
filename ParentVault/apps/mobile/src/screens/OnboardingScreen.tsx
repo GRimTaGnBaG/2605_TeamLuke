@@ -9,21 +9,22 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ImportSourceType } from '@parentvault/shared';
 import { Card } from '../components/Card';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { createDocumentImportSuggestion, inferDocumentSourceType, readDocumentAsset } from '../services/documentReader';
+import { ThemedTextInput } from '../components/ThemedTextInput';
+import { createImportSuggestion } from '../services/aiImport';
 import { useVaultStore } from '../store/vaultStore';
 import { useTheme } from '../theme';
-import { draftFromChild, id, splitList } from './onboarding/onboardingHelpers';
+import { draftFromChild, id, inferSourceType, readAssetText, splitList } from './onboarding/onboardingHelpers';
 import { steps } from './onboarding/onboardingSteps';
 import type { SetupDraft } from './onboarding/onboardingTypes';
 
@@ -57,22 +58,6 @@ export function OnboardingScreen() {
     const providerName = draft.providerName.trim();
     const pharmacyName = draft.pharmacyName.trim();
     const emergencyName = draft.emergencyContactName.trim();
-    const customInfoTitle = draft.customInfoTitle.trim();
-    const customInfoValue = draft.customInfoValue.trim();
-    const customInfo = [...(firstChild?.customInfo ?? [])];
-    if (customInfoTitle || customInfoValue) {
-      const existingIndex = customInfo.findIndex(item => item.title.toLowerCase() === customInfoTitle.toLowerCase());
-      const savedAt = new Date().toISOString();
-      const customInfoItem = {
-        id: existingIndex >= 0 ? customInfo[existingIndex].id : id('custom'),
-        title: customInfoTitle || 'Other information',
-        value: customInfoValue || 'Not filled in yet',
-        createdAt: existingIndex >= 0 ? customInfo[existingIndex].createdAt : savedAt,
-        updatedAt: savedAt
-      };
-      if (existingIndex >= 0) customInfo[existingIndex] = customInfoItem;
-      else customInfo.push(customInfoItem);
-    }
     const childPatch = {
       displayName: draft.childName.trim() || draft.preferredName.trim() || 'My Child',
       legalName: draft.legalName.trim() || undefined,
@@ -115,17 +100,16 @@ export function OnboardingScreen() {
         sourceDocumentIds: firstChild?.legalCustody?.sourceDocumentIds ?? [],
         notes: 'Added during Nanny Bot onboarding. Review against the legal order.'
       } : undefined,
-      customInfo,
       notes: firstChild?.notes
     };
 
-    const savedChildId = firstChild ? firstChild.id : addChild(childPatch);
     if (firstChild) updateChild(firstChild.id, childPatch);
+    else addChild(childPatch);
 
     if (draft.journalNote.trim()) {
       const createdAt = new Date().toISOString();
       addJournalEntry({
-        childId: savedChildId,
+        childId: firstChild?.id,
         type: 'general',
         occurredAt: createdAt,
         occurredAtPrecision: 'exact',
@@ -147,7 +131,7 @@ export function OnboardingScreen() {
   // Creates a review-only draft from pasted/uploaded material and fills matching fields.
   const applyImportText = async (sourceType: ImportSourceType, label: string, rawText = pasteText) => {
     const cleanText = rawText.trim();
-    const suggestion = await createDocumentImportSuggestion({ sourceType, label, rawText: cleanText });
+    const suggestion = await createImportSuggestion({ sourceType, label, rawText: cleanText });
     const profile = suggestion.proposedProfiles?.[0];
     const school = profile?.school;
     if (profile?.displayName && !draft.childName.trim()) setField('childName', profile.displayName);
@@ -174,7 +158,7 @@ export function OnboardingScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 });
     if (!result.canceled) {
       const asset = result.assets[0];
-      await applyImportText(inferDocumentSourceType(asset.fileName || 'image', asset.mimeType || 'image/*'), asset.fileName || `${step.label} image`, pasteText);
+      await applyImportText(inferSourceType(asset.fileName || 'image', asset.mimeType || 'image/*'), asset.fileName || `${step.label} image`, pasteText);
     }
   };
 
@@ -183,10 +167,25 @@ export function OnboardingScreen() {
     const result = await DocumentPicker.getDocumentAsync({ type: ['application/pdf', 'text/*', 'text/calendar', 'application/json', 'image/*'], copyToCacheDirectory: true });
     if (!result.canceled) {
       const asset = result.assets[0];
-      const readResult = await readDocumentAsset(asset);
-      const rawText = readResult.text || pasteText;
-      await applyImportText(readResult.sourceType, asset.name, rawText);
+      const rawText = (await readAssetText(asset.uri)) || pasteText;
+      await applyImportText(inferSourceType(asset.name, asset.mimeType || ''), asset.name, rawText);
     }
+  };
+
+  const usePastedText = () => {
+    if (!pasteText.trim()) {
+      setAssistantNote('Paste text from a school page, message, document, or screenshot first. I will use it to fill this step for review.');
+      return;
+    }
+    void applyImportText('text', `${step.label} pasted text`, pasteText);
+  };
+
+  const goBack = () => {
+    if (stepIndex === 0) {
+      setAssistantNote('You are already at the first setup step.');
+      return;
+    }
+    setStepIndex(index => Math.max(index - 1, 0));
   };
 
   // Render order: guide card, step dots, current step form, import helper, navigation buttons.
@@ -216,62 +215,59 @@ export function OnboardingScreen() {
       {step.key === 'basics' ? (
         <Card>
           <Text style={styles.section}>Child basics</Text>
-          <TextInput value={draft.childName} onChangeText={value => setField('childName', value)} placeholder="Child display name" style={styles.input} />
-          <TextInput value={draft.legalName} onChangeText={value => setField('legalName', value)} placeholder="Legal name" style={styles.input} />
-          <TextInput value={draft.preferredName} onChangeText={value => setField('preferredName', value)} placeholder="Preferred name / nickname" style={styles.input} />
-          <TextInput value={draft.birthdate} onChangeText={value => setField('birthdate', value)} placeholder="Birthdate" style={styles.input} />
-          <Text style={styles.help}>Need to save something that does not fit the standard slots? Add a custom title and details here.</Text>
-          <TextInput value={draft.customInfoTitle} onChangeText={value => setField('customInfoTitle', value)} placeholder="Custom title, like Bus route or Comfort item" style={styles.input} />
-          <TextInput value={draft.customInfoValue} onChangeText={value => setField('customInfoValue', value)} placeholder="Details for that custom information" multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.childName} onChangeText={value => setField('childName', value)} placeholder="Child display name" style={styles.input} />
+          <ThemedTextInput value={draft.legalName} onChangeText={value => setField('legalName', value)} placeholder="Legal name" style={styles.input} />
+          <ThemedTextInput value={draft.preferredName} onChangeText={value => setField('preferredName', value)} placeholder="Preferred name / nickname" style={styles.input} />
+          <ThemedTextInput value={draft.birthdate} onChangeText={value => setField('birthdate', value)} placeholder="Birthdate" style={styles.input} />
         </Card>
       ) : null}
 
       {step.key === 'school' ? (
         <Card>
           <Text style={styles.section}>School details</Text>
-          <TextInput value={draft.schoolName} onChangeText={value => setField('schoolName', value)} placeholder="School name" style={styles.input} />
-          <TextInput value={draft.grade} onChangeText={value => setField('grade', value)} placeholder="Grade" style={styles.input} />
-          <TextInput value={draft.teacherName} onChangeText={value => setField('teacherName', value)} placeholder="Teacher" style={styles.input} />
-          <TextInput value={draft.schoolPhone} onChangeText={value => setField('schoolPhone', value)} placeholder="School / attendance phone" style={styles.input} />
-          <TextInput value={draft.schoolWebsite} onChangeText={value => setField('schoolWebsite', value)} placeholder="Website or calendar link" style={styles.input} />
-          <TextInput value={draft.pickupInstructions} onChangeText={value => setField('pickupInstructions', value)} placeholder="Pickup / bus / after-school notes" multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.schoolName} onChangeText={value => setField('schoolName', value)} placeholder="School name" style={styles.input} />
+          <ThemedTextInput value={draft.grade} onChangeText={value => setField('grade', value)} placeholder="Grade" style={styles.input} />
+          <ThemedTextInput value={draft.teacherName} onChangeText={value => setField('teacherName', value)} placeholder="Teacher" style={styles.input} />
+          <ThemedTextInput value={draft.schoolPhone} onChangeText={value => setField('schoolPhone', value)} placeholder="School / attendance phone" style={styles.input} />
+          <ThemedTextInput value={draft.schoolWebsite} onChangeText={value => setField('schoolWebsite', value)} placeholder="Website or calendar link" style={styles.input} />
+          <ThemedTextInput value={draft.pickupInstructions} onChangeText={value => setField('pickupInstructions', value)} placeholder="Pickup / bus / after-school notes" multiline style={styles.textArea} />
         </Card>
       ) : null}
 
       {step.key === 'medical' ? (
         <Card>
           <Text style={styles.section}>Medical and care</Text>
-          <TextInput value={draft.allergies} onChangeText={value => setField('allergies', value)} placeholder="Allergies" style={styles.input} />
-          <TextInput value={draft.conditions} onChangeText={value => setField('conditions', value)} placeholder="Conditions" style={styles.input} />
-          <TextInput value={draft.medications} onChangeText={value => setField('medications', value)} placeholder="Medications, dosage, schedule" multiline style={styles.textArea} />
-          <TextInput value={draft.careInstructions} onChangeText={value => setField('careInstructions', value)} placeholder="Care instructions" multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.allergies} onChangeText={value => setField('allergies', value)} placeholder="Allergies" style={styles.input} />
+          <ThemedTextInput value={draft.conditions} onChangeText={value => setField('conditions', value)} placeholder="Conditions" style={styles.input} />
+          <ThemedTextInput value={draft.medications} onChangeText={value => setField('medications', value)} placeholder="Medications, dosage, schedule" multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.careInstructions} onChangeText={value => setField('careInstructions', value)} placeholder="Care instructions" multiline style={styles.textArea} />
         </Card>
       ) : null}
 
       {step.key === 'care' ? (
         <Card>
           <Text style={styles.section}>Care team</Text>
-          <TextInput value={draft.providerName} onChangeText={value => setField('providerName', value)} placeholder="Doctor / therapist / provider" style={styles.input} />
-          <TextInput value={draft.providerPhone} onChangeText={value => setField('providerPhone', value)} placeholder="Provider phone" style={styles.input} />
-          <TextInput value={draft.pharmacyName} onChangeText={value => setField('pharmacyName', value)} placeholder="Pharmacy" style={styles.input} />
-          <TextInput value={draft.insuranceProvider} onChangeText={value => setField('insuranceProvider', value)} placeholder="Insurance provider" style={styles.input} />
-          <TextInput value={draft.emergencyContactName} onChangeText={value => setField('emergencyContactName', value)} placeholder="Emergency contact / pickup person" style={styles.input} />
-          <TextInput value={draft.emergencyContactPhone} onChangeText={value => setField('emergencyContactPhone', value)} placeholder="Emergency contact phone" style={styles.input} />
+          <ThemedTextInput value={draft.providerName} onChangeText={value => setField('providerName', value)} placeholder="Doctor / therapist / provider" style={styles.input} />
+          <ThemedTextInput value={draft.providerPhone} onChangeText={value => setField('providerPhone', value)} placeholder="Provider phone" style={styles.input} />
+          <ThemedTextInput value={draft.pharmacyName} onChangeText={value => setField('pharmacyName', value)} placeholder="Pharmacy" style={styles.input} />
+          <ThemedTextInput value={draft.insuranceProvider} onChangeText={value => setField('insuranceProvider', value)} placeholder="Insurance provider" style={styles.input} />
+          <ThemedTextInput value={draft.emergencyContactName} onChangeText={value => setField('emergencyContactName', value)} placeholder="Emergency contact / pickup person" style={styles.input} />
+          <ThemedTextInput value={draft.emergencyContactPhone} onChangeText={value => setField('emergencyContactPhone', value)} placeholder="Emergency contact phone" style={styles.input} />
         </Card>
       ) : null}
 
       {step.key === 'custody' ? (
         <Card>
           <Text style={styles.section}>Custody / exchange</Text>
-          <TextInput value={draft.custodySummary} onChangeText={value => setField('custodySummary', value)} placeholder="Plain-English custody summary" multiline style={styles.textArea} />
-          <TextInput value={draft.exchangeRules} onChangeText={value => setField('exchangeRules', value)} placeholder="Exchange times, locations, holidays, exceptions" multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.custodySummary} onChangeText={value => setField('custodySummary', value)} placeholder="Plain-English custody summary" multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.exchangeRules} onChangeText={value => setField('exchangeRules', value)} placeholder="Exchange times, locations, holidays, exceptions" multiline style={styles.textArea} />
         </Card>
       ) : null}
 
       {step.key === 'journal' ? (
         <Card>
           <Text style={styles.section}>First journal note</Text>
-          <TextInput value={draft.journalNote} onChangeText={value => setField('journalNote', value)} placeholder="What should ParentVault remember? Keep it factual." multiline style={styles.textArea} />
+          <ThemedTextInput value={draft.journalNote} onChangeText={value => setField('journalNote', value)} placeholder="What should ParentVault remember? Keep it factual." multiline style={styles.textArea} />
         </Card>
       ) : null}
 
@@ -282,9 +278,8 @@ export function OnboardingScreen() {
           <Text>School: {draft.schoolName || 'Not set'}</Text>
           <Text>Medical: {splitList(draft.allergies).length} allergies, {splitList(draft.conditions).length} conditions, {splitList(draft.medications).length} meds</Text>
           <Text>Care team: {[draft.providerName, draft.pharmacyName, draft.insuranceProvider, draft.emergencyContactName].filter(Boolean).length} items</Text>
-          <Text>Custom info: {draft.customInfoTitle || draft.customInfoValue ? 'Drafted' : 'Not set'}</Text>
           <Text>Custody: {draft.custodySummary || draft.exchangeRules ? 'Drafted' : 'Not set'}</Text>
-          <Text style={styles.warning}>Privacy note: sensitive data needs encrypted storage before real-world use.</Text>
+          <Text style={styles.warning}>Security reminder: review sensitive details carefully and keep unnecessary private information out of shared exports.</Text>
         </Card>
       ) : null}
 
@@ -292,8 +287,8 @@ export function OnboardingScreen() {
         <Card>
           <Text style={styles.section}>Upload or paste for this step</Text>
           <Text style={styles.help}>{step.uploadHint}</Text>
-          <TextInput value={pasteText} onChangeText={setPasteText} placeholder="Paste text from a document, message, school page, or screenshot here." multiline style={styles.textArea} />
-          <PrimaryButton onPress={() => applyImportText('text', `${step.label} pasted text`, pasteText)} disabled={!pasteText.trim()}>Use pasted text</PrimaryButton>
+          <ThemedTextInput value={pasteText} onChangeText={setPasteText} placeholder="Paste text from a document, message, school page, or screenshot here." multiline style={styles.textArea} />
+          <PrimaryButton onPress={usePastedText}>Use pasted text</PrimaryButton>
           <PrimaryButton tone="quiet" onPress={pickImage}>Upload image / screenshot</PrimaryButton>
           <PrimaryButton tone="quiet" onPress={pickDocument}>Upload PDF / document / calendar</PrimaryButton>
           <Text style={styles.help}>Uploads create review drafts. If a PDF or image cannot be read yet, paste the visible text above too.</Text>
@@ -302,7 +297,7 @@ export function OnboardingScreen() {
 
       <Card>
         <View style={styles.buttonRow}>
-          <PrimaryButton tone="quiet" onPress={() => setStepIndex(index => Math.max(index - 1, 0))} disabled={stepIndex === 0}>Back</PrimaryButton>
+          <PrimaryButton tone="quiet" onPress={goBack}>Back</PrimaryButton>
           {step.key === 'review' ? <PrimaryButton onPress={completeSetup}>Finish setup</PrimaryButton> : <PrimaryButton onPress={() => { saveDraft(); setPasteText(''); setStepIndex(index => Math.min(index + 1, steps.length - 1)); }}>Save and continue</PrimaryButton>}
         </View>
         <PrimaryButton tone="quiet" onPress={completeOnboarding}>Skip Nanny for now</PrimaryButton>
@@ -334,8 +329,8 @@ const createStyles = (theme: ReturnType<typeof useTheme>) => StyleSheet.create({
   stepDotTextActive: { color: '#ffffff' },
   section: { fontSize: 18, fontWeight: '900', color: theme.text, marginBottom: 8 },
   help: { color: theme.subtle, marginTop: 6, marginBottom: 8 },
-  input: { minHeight: 44, borderRadius: 12, borderWidth: 1, borderColor: theme.inputBorder, padding: 10, backgroundColor: theme.input, marginTop: 8 },
-  textArea: { minHeight: 110, borderRadius: 12, borderWidth: 1, borderColor: theme.inputBorder, padding: 10, backgroundColor: theme.input, marginTop: 8, textAlignVertical: 'top' },
+  input: { minHeight: 44 },
+  textArea: { minHeight: 110, textAlignVertical: 'top' },
   warning: { color: '#9a3412', backgroundColor: '#fff7ed', padding: 10, borderRadius: 12, marginTop: 10, fontWeight: '700' },
   buttonRow: { gap: 8 },
 });

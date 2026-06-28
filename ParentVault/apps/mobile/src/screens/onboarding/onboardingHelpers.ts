@@ -11,11 +11,12 @@ import type { SetupDraft } from './onboardingTypes';
 /** Split comma/newline text into clean list values for allergies, meds, conditions, etc. */
 export const splitList = (value: string) => value.split(/\n|,/).map(item => item.trim()).filter(Boolean);
 
-/** Generate a small draft ID for draft child/profile records. */
+/** Generate a small prototype ID for draft child/profile records. */
 export const id = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 
 /** Guess the import source type from a selected file name or MIME type. */
 export const inferSourceType = (name = '', mimeType = ''): ImportSourceType => {
+  // Combine filename and MIME type so either signal can classify the source.
   const value = `${name} ${mimeType}`.toLowerCase();
   if (value.includes('calendar') || value.endsWith('.ics')) return 'calendar';
   if (value.includes('custody') || value.includes('decree') || value.includes('order')) return 'decree';
@@ -28,10 +29,13 @@ export const inferSourceType = (name = '', mimeType = ''): ImportSourceType => {
 
 /** Read plain text-like uploads locally. PDFs/images return blank until OCR is added. */
 export const readAssetText = async (uri?: string) => {
+  // No URI means there is nothing to read.
   if (!uri) return '';
   try {
+    // Expo document/image pickers provide URIs; fetch lets us inspect local blob metadata.
     const response = await fetch(uri);
     const blob = await response.blob();
+    // Only read text-like files locally. Images/PDFs need OCR/parser support first.
     if (blob.type && !blob.type.includes('text') && !blob.type.includes('calendar') && !blob.type.includes('json')) return '';
     return await blob.text();
   } catch {
@@ -41,15 +45,14 @@ export const readAssetText = async (uri?: string) => {
 
 /** Convert an existing child profile into the editable onboarding draft form. */
 export const draftFromChild = (child?: ChildProfile): SetupDraft => ({
+  // Every field falls back to an empty string so controlled inputs never receive undefined.
   childName: child?.displayName ?? '',
   legalName: child?.legalName ?? '',
   preferredName: child?.preferredName ?? '',
   birthdate: child?.birthdate ?? '',
-  customInfoTitle: '',
-  customInfoValue: '',
   allergies: child?.medical.allergies.join(', ') ?? '',
   conditions: child?.medical.conditions.join(', ') ?? '',
-  medications: child?.medical.medications.map(med => [med.name, med.dosage, med.scheduleText].filter(Boolean).join(' — ')).join('\n') ?? '',
+  medications: child?.medical.medications.map(med => [med.name, med.dosage, med.scheduleText].filter(Boolean).join(' - ')).join('\n') ?? '',
   careInstructions: child?.medical.careInstructions ?? '',
   schoolName: child?.school?.schoolName ?? '',
   grade: child?.school?.grade ?? '',

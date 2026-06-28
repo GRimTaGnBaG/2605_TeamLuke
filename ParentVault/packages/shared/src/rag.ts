@@ -9,17 +9,22 @@
  *
  * Reading guide:
  * - Comments in this project explain product intent, privacy/security boundaries, and why a flow exists.
- * - They are deliberately more detailed than normal production comments because this app is being shared for learning, review, and handoff.
+ * - They are deliberately more detailed than normal production comments because this prototype is being shared for learning, review, and handoff.
  * - If code and comments ever disagree, fix both together; stale privacy/security comments are dangerous.
  */
 
 import type { ChildProfile, ID, JournalEntry, KnowledgeSource, RagAnswer, ScheduleItem } from './index';
 
 export interface ImportedDocument {
+  // Local/document id used as citation identity.
   id: ID;
+  // Optional child link lets retrieval narrow answers to one child.
   childId?: ID;
+  // Human-readable document title shown in source lists.
   title: string;
+  // Extracted or pasted document text used for retrieval.
   text: string;
+  // Source type helps explain provenance of imported text.
   sourceType?: string;
   uri?: string;
   sensitive?: boolean;
@@ -27,16 +32,24 @@ export interface ImportedDocument {
 }
 
 export interface RagKnowledgeInput {
+  // Current in-memory child records.
   children: ChildProfile[];
+  // Current schedule items to make calendar facts searchable.
   schedule: ScheduleItem[];
+  // Current journal entries to make parent notes searchable.
   journal: JournalEntry[];
+  // Optional imported documents for future OCR/file ingestion.
   documents?: ImportedDocument[];
+  // Optional clock override for tests/future deterministic answer behavior.
   now?: string;
 }
 
 export interface RetrievalOptions {
+  // If supplied, prefer sources linked to this child plus global sources.
   childId?: ID;
+  // Maximum number of citations/snippets to return.
   maxSources?: number;
+  // Minimum score required for a source to count as relevant.
   minScore?: number;
 }
 
@@ -53,16 +66,21 @@ const STOP_WORDS = new Set([
   'what', 'when', 'where', 'which', 'who', 'why', 'with'
 ]);
 
+// Joins optional lines into one source body while dropping missing fields.
 const compact = (parts: Array<string | undefined | null | false>): string => parts.filter(Boolean).join('\n');
+// Formats array fields only when they actually contain values.
 const asList = (label: string, values?: string[]): string | undefined => values?.length ? `${label}: ${values.join(', ')}` : undefined;
+// Formats nested address data into a single readable source line.
 const formatAddress = (address?: { line1: string; line2?: string; city: string; state: string; postalCode: string; country?: string }): string | undefined => {
   if (!address) return undefined;
   return [address.line1, address.line2, `${address.city}, ${address.state} ${address.postalCode}`, address.country].filter(Boolean).join(', ');
 };
+// Last-line safety net: redact obvious SSN-like values before source text is returned to the UI.
 const redact = (text: string): string => text
   .replace(/\b\d{3}-?\d{2}-?\d{4}\b/g, '[redacted ssn]')
   .replace(/\b(?:ssn|social security number)\s*[:#]?\s*\S+/gi, 'SSN: [redacted]');
 
+// Creates a KnowledgeSource and trims long bodies so answer previews stay manageable.
 const source = (input: Omit<KnowledgeSource, 'text'> & { text: string }): KnowledgeSource => ({
   ...input,
   text: redact(input.text).slice(0, 2400)
@@ -71,6 +89,8 @@ const source = (input: Omit<KnowledgeSource, 'text'> & { text: string }): Knowle
 export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource[] {
   const sources: KnowledgeSource[] = [];
 
+  // Child profile data is expanded into multiple source records so a doctor query can cite
+  // the provider directly instead of burying the answer in a giant profile blob.
   for (const child of input.children) {
     sources.push(source({
       id: `profile:${child.id}`,
@@ -94,6 +114,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
       ])
     }));
 
+    // Medications become independent sources because parents often ask dose/refill questions directly.
     for (const medication of child.medical.medications) {
       sources.push(source({
         id: `medication:${child.id}:${medication.id}`,
@@ -122,6 +143,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
       }));
     }
 
+    // Providers are searchable by person, organization, role, phone, portal, and office metadata.
     for (const provider of child.careProviders) {
       sources.push(source({
         id: `provider:${child.id}:${provider.id}`,
@@ -148,6 +170,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
       }));
     }
 
+    // Emergency contacts are sensitive but useful for pickup/contact questions.
     for (const contact of child.contacts) {
       sources.push(source({
         id: `contact:${child.id}:${contact.id}`,
@@ -167,6 +190,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
       }));
     }
 
+    // Insurance source includes non-encrypted display/contact metadata only.
     for (const policy of child.insurance) {
       sources.push(source({
         id: `insurance:${child.id}:${policy.id}`,
@@ -191,6 +215,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
       }));
     }
 
+    // School details become one school source with calendar/pickup/attendance information.
     if (child.school) {
       const school = child.school;
       sources.push(source({
@@ -220,6 +245,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
       }));
     }
 
+    // Legal custody summaries are always sensitive and must be cited conservatively.
     if (child.legalCustody) {
       const legal = child.legalCustody;
       sources.push(source({
@@ -241,24 +267,9 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
         ])
       }));
     }
-
-    for (const item of child.customInfo ?? []) {
-      sources.push(source({
-        id: `custom:${child.id}:${item.id}`,
-        childId: child.id,
-        kind: 'profile',
-        title: `Custom info: ${item.title}`,
-        sensitive: true,
-        updatedAt: item.updatedAt,
-        text: compact([
-          `Custom child information for ${child.displayName}`,
-          `Title: ${item.title}`,
-          `Details: ${item.value}`
-        ])
-      }));
-    }
   }
 
+  // Schedule items become searchable facts for "when/where/what is next" questions.
   for (const item of input.schedule) {
     sources.push(source({
       id: `schedule:${item.id}`,
@@ -283,6 +294,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
     }));
   }
 
+  // Journal entries include audit metadata so export/evidence context is preserved in answers.
   for (const entry of input.journal) {
     sources.push(source({
       id: `journal:${entry.id}`,
@@ -308,6 +320,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
     }));
   }
 
+  // Imported documents are optional because current mobile prototype may not have OCR/text imports yet.
   for (const doc of input.documents ?? []) {
     sources.push(source({
       id: `document:${doc.id}`,
@@ -329,6 +342,7 @@ export function buildKnowledgeSources(input: RagKnowledgeInput): KnowledgeSource
 }
 
 export function tokenize(text: string): string[] {
+  // Simple tokenization is enough for this prototype: lowercase, strip punctuation, split, and drop stop words.
   return text
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, ' ')
@@ -342,17 +356,20 @@ export function retrieveKnowledgeSources(
   sources: KnowledgeSource[],
   options: RetrievalOptions = {}
 ): ScoredSource[] {
+  // Convert the query into comparable tokens. Empty or stop-word-only queries return no matches.
   const queryTokens = tokenize(query);
   if (!queryTokens.length) return [];
   const maxSources = options.maxSources ?? DEFAULT_MAX_SOURCES;
   const querySet = new Set(queryTokens);
 
   return sources
+    // Child filtering still allows childless/global sources through.
     .filter(item => !options.childId || item.childId === options.childId || item.childId === undefined)
     .map(item => {
       const titleTokens = tokenize(item.title);
       const textTokens = tokenize(item.text);
       let score = 0;
+      // Title matches are weighted higher than body matches because titles are curated summaries.
       for (const token of querySet) {
         if (titleTokens.includes(token)) score += 2.5;
         score += Math.min(3, textTokens.filter(candidate => candidate === token).length) * 1.0;
@@ -371,6 +388,7 @@ export function answerFromSources(
   sources: KnowledgeSource[],
   options: RetrievalOptions = {}
 ): RagAnswer {
+  // Retrieval is the only source of truth for the answer; no uncited facts are generated here.
   const retrieved = retrieveKnowledgeSources(query, sources, options);
 
   if (!retrieved.length) {
@@ -384,6 +402,7 @@ export function answerFromSources(
     };
   }
 
+  // Build source snippets from the top few lines so the answer remains inspectable.
   const citedSources = retrieved.map(item => item.source);
   const answerLines = retrieved.map((item, index) => {
     const snippet = item.source.text.split('\n').slice(0, 5).join('; ');
@@ -406,5 +425,6 @@ export function answerFromKnowledge(
   input: RagKnowledgeInput,
   options: RetrievalOptions = {}
 ): RagAnswer {
+  // Convenience wrapper used by the app store: build sources, then answer from those sources.
   return answerFromSources(query, buildKnowledgeSources(input), options);
 }
